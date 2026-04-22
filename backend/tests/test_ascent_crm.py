@@ -416,9 +416,11 @@ class TestAudit:
         assert isinstance(entries, list) and len(entries) > 0
 
     def test_mutation_writes_audit(self, auth_session):
-        before = len(auth_session.get(f"{API}/audit").json())
+        # Use a high limit so a full 500-row page covers existing audit history —
+        # default `limit=100` caused a known flake once the tenant exceeded 100 rows.
+        before = len(auth_session.get(f"{API}/audit?limit=500").json())
         # Trigger a mutation
         auth_session.post(f"{API}/companies", json={"name": "TEST_AuditCo"})
         time.sleep(0.3)
-        after = len(auth_session.get(f"{API}/audit").json())
+        after = len(auth_session.get(f"{API}/audit?limit=500").json())
         assert after > before

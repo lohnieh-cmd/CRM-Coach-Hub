@@ -2929,114 +2929,15 @@ async def company_contacts(cid: str, u: dict = Depends(current_user)):
 # ══════════════════════════════════════════════════════════════════════════════
 from decimal import Decimal, ROUND_HALF_UP
 
-ACCOUNT_TYPES = ["asset", "liability", "equity", "income", "expense"]
-NORMAL_BALANCE = {"asset": "debit", "expense": "debit",
-                  "liability": "credit", "equity": "credit", "income": "credit"}
-
-# Statutory SA VAT codes used in the VAT201 return (simplified)
-SA_VAT_CODES = [
-    {"code": "S", "name": "Standard-rated 15%", "rate_pct": 15.0, "direction": "both",  "vat201_box": "1"},
-    {"code": "Z", "name": "Zero-rated",          "rate_pct": 0.0,  "direction": "both",  "vat201_box": "2"},
-    {"code": "E", "name": "Exempt supplies",     "rate_pct": 0.0,  "direction": "output", "vat201_box": "3"},
-    {"code": "NV","name": "Non-vatable / Out-of-scope", "rate_pct": 0.0, "direction": "both", "vat201_box": "0"},
-    {"code": "SI","name": "Standard-rated inputs 15%",  "rate_pct": 15.0, "direction": "input", "vat201_box": "14"},
-    {"code": "CI","name": "Capital inputs 15%",          "rate_pct": 15.0, "direction": "input", "vat201_box": "15"},
-]
-
-# Standard SA Chart of Accounts for a coaching / professional-services business.
-# 5-digit codes, parent groupings, VAT + normal-balance presets.
-SA_COA_SEED: list[dict] = [
-    # --- ASSETS (1xxxx) ---
-    {"code": "10000", "name": "Non-current Assets", "type": "asset", "subtype": "header"},
-    {"code": "11000", "name": "Property, Plant & Equipment", "type": "asset", "subtype": "ppe", "parent": "10000"},
-    {"code": "11100", "name": "Computer Equipment — Cost", "type": "asset", "subtype": "ppe", "parent": "11000"},
-    {"code": "11110", "name": "Computer Equipment — Accumulated Depreciation", "type": "asset", "subtype": "ppe_contra", "parent": "11000"},
-    {"code": "11200", "name": "Office Furniture — Cost", "type": "asset", "subtype": "ppe", "parent": "11000"},
-    {"code": "11210", "name": "Office Furniture — Accumulated Depreciation", "type": "asset", "subtype": "ppe_contra", "parent": "11000"},
-    {"code": "12000", "name": "Intangible Assets", "type": "asset", "subtype": "intangible", "parent": "10000"},
-    {"code": "20000", "name": "Current Assets", "type": "asset", "subtype": "header"},
-    {"code": "21000", "name": "Bank — Current Account (FNB)", "type": "asset", "subtype": "bank", "parent": "20000"},
-    {"code": "21100", "name": "Bank — Savings Account",        "type": "asset", "subtype": "bank", "parent": "20000"},
-    {"code": "21200", "name": "Petty Cash", "type": "asset", "subtype": "cash", "parent": "20000"},
-    {"code": "22000", "name": "Trade Debtors (Accounts Receivable)", "type": "asset", "subtype": "receivable", "parent": "20000"},
-    {"code": "22100", "name": "Allowance for Doubtful Debts",         "type": "asset", "subtype": "receivable_contra", "parent": "20000"},
-    {"code": "23000", "name": "VAT Input (Receivable from SARS)",     "type": "asset", "subtype": "tax", "parent": "20000"},
-    {"code": "24000", "name": "Prepayments", "type": "asset", "subtype": "prepaid", "parent": "20000"},
-    {"code": "25000", "name": "Provisional Tax Paid (SARS asset)", "type": "asset", "subtype": "tax", "parent": "20000"},
-
-    # --- EQUITY (3xxxx) ---
-    {"code": "30000", "name": "Equity", "type": "equity", "subtype": "header"},
-    {"code": "31000", "name": "Share Capital / Owner's Contribution", "type": "equity", "subtype": "capital", "parent": "30000"},
-    {"code": "32000", "name": "Retained Earnings",                     "type": "equity", "subtype": "retained", "parent": "30000"},
-    {"code": "33000", "name": "Current-year Earnings (P&L clearing)",  "type": "equity", "subtype": "retained", "parent": "30000"},
-    {"code": "34000", "name": "Owner's Drawings",                       "type": "equity", "subtype": "drawings", "parent": "30000"},
-
-    # --- LIABILITIES (4xxxx non-current / 5xxxx current) ---
-    {"code": "40000", "name": "Non-current Liabilities", "type": "liability", "subtype": "header"},
-    {"code": "41000", "name": "Long-term Loans",         "type": "liability", "subtype": "loan", "parent": "40000"},
-    {"code": "50000", "name": "Current Liabilities", "type": "liability", "subtype": "header"},
-    {"code": "51000", "name": "Trade Creditors (Accounts Payable)", "type": "liability", "subtype": "payable", "parent": "50000"},
-    {"code": "52000", "name": "VAT Output (Payable to SARS)",       "type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "52100", "name": "VAT Control (net of Input vs Output)","type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "53000", "name": "PAYE Payable",         "type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "53100", "name": "UIF Payable",          "type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "53200", "name": "SDL Payable",          "type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "54000", "name": "Corporate Income Tax Payable (SARS)", "type": "liability", "subtype": "tax", "parent": "50000"},
-    {"code": "55000", "name": "Accruals",             "type": "liability", "subtype": "accrual", "parent": "50000"},
-    {"code": "56000", "name": "Stripe / PayPal Clearing Account",    "type": "liability", "subtype": "clearing", "parent": "50000"},
-
-    # --- INCOME (6xxxx) ---
-    {"code": "60000", "name": "Revenue", "type": "income", "subtype": "header"},
-    {"code": "61000", "name": "Coaching Revenue — 1:1 Sessions",        "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "S"},
-    {"code": "61100", "name": "Coaching Revenue — Group Programs",      "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "S"},
-    {"code": "61200", "name": "Retainer / Subscription Revenue",         "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "S"},
-    {"code": "61300", "name": "Assessment & Diagnostic Revenue",         "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "S"},
-    {"code": "61400", "name": "Speaking / Keynote Revenue",              "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "S"},
-    {"code": "61500", "name": "Export Coaching Revenue (zero-rated)",    "type": "income", "subtype": "revenue", "parent": "60000", "vat_code": "Z"},
-    {"code": "69000", "name": "Other Income",                           "type": "income", "subtype": "other", "parent": "60000"},
-    {"code": "69100", "name": "Interest Income",                        "type": "income", "subtype": "other", "parent": "60000", "vat_code": "E"},
-
-    # --- OPERATING EXPENSES (8xxxx) ---
-    {"code": "80000", "name": "Operating Expenses", "type": "expense", "subtype": "header"},
-    {"code": "81000", "name": "Advertising & Marketing",                "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81100", "name": "Subscriptions & Software",              "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81200", "name": "Travel — Local",                        "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81300", "name": "Travel — International (zero-rated)",   "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "Z"},
-    {"code": "81400", "name": "Accommodation",                         "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81500", "name": "Meals & Entertainment (non-deductible)", "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "NV"},
-    {"code": "81600", "name": "Telephone & Internet",                  "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81700", "name": "Bank Charges",                          "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "E"},
-    {"code": "81800", "name": "Professional Fees (Accounting / Legal)", "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "81900", "name": "Training & CPD",                        "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "82000", "name": "Stationery & Printing",                 "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "82100", "name": "Insurance",                             "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "E"},
-    {"code": "82200", "name": "Rent",                                  "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "82300", "name": "Utilities (Electricity, Water)",        "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "82400", "name": "Motor Vehicle Expenses",                "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "SI"},
-    {"code": "82500", "name": "Depreciation",                          "type": "expense", "subtype": "opex", "parent": "80000", "vat_code": "NV"},
-    {"code": "82600", "name": "Salaries & Wages",                      "type": "expense", "subtype": "payroll", "parent": "80000", "vat_code": "NV"},
-    {"code": "82700", "name": "UIF Contribution (Employer)",           "type": "expense", "subtype": "payroll", "parent": "80000", "vat_code": "NV"},
-    {"code": "82800", "name": "SDL Contribution (Employer)",           "type": "expense", "subtype": "payroll", "parent": "80000", "vat_code": "NV"},
-
-    # --- FINANCE / TAX (9xxxx) ---
-    {"code": "90000", "name": "Finance & Tax", "type": "expense", "subtype": "header"},
-    {"code": "91000", "name": "Interest Expense", "type": "expense", "subtype": "finance", "parent": "90000", "vat_code": "E"},
-    {"code": "91100", "name": "Foreign Exchange Loss / (Gain)", "type": "expense", "subtype": "finance", "parent": "90000", "vat_code": "NV"},
-    {"code": "92000", "name": "Corporate Income Tax Expense (27%)", "type": "expense", "subtype": "tax", "parent": "90000", "vat_code": "NV"},
-]
-
-
-def _D(v) -> Decimal:
-    """Money helper: always 2-decimal Decimal (rounded half-up, ZAR cents)."""
-    if v is None:
-        return Decimal("0.00")
-    return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _period_key(d: datetime | str) -> str:
-    if isinstance(d, str):
-        d = datetime.fromisoformat(d.replace("Z", "+00:00"))
-    return d.strftime("%Y-%m")
+# Static data + helpers extracted to dedicated modules for maintainability.
+from accounting_data import (  # noqa: E402
+    ACCOUNT_TYPES,
+    NORMAL_BALANCE,
+    SA_VAT_CODES,
+    SA_COA_SEED,
+    _D,
+    _period_key,
+)
 
 
 class JournalLineIn(BaseDoc):
@@ -3657,11 +3558,7 @@ async def period_notes(period: str, u: dict = Depends(current_user)):
 # ══════════════════════════════════════════════════════════════════════════════
 #  PHASE 2 batch 7 — PDF exports (VAT201 + TB + IS + BS)
 # ══════════════════════════════════════════════════════════════════════════════
-def _fmt_zar(v: float | int | Decimal | None) -> str:
-    try:
-        return f"R {float(v or 0):,.2f}".replace(",", " ")  # ZAR: space as thousands sep
-    except Exception:
-        return f"R {v}"
+from accounting_pdf import _fmt_zar, _pdf_buf_from_story, _report_table  # noqa: E402
 
 
 async def _resolve_owner_branding(uid: str) -> dict:
@@ -3672,63 +3569,6 @@ async def _resolve_owner_branding(uid: str) -> dict:
         "accent_hex": (tpl.get("accent_color_hex") or "E26E4A").lstrip("#")[:6] or "E26E4A",
         "email": owner.get("email") or "",
     }
-
-
-def _pdf_buf_from_story(title: str, story_builder, branding: dict) -> io.BytesIO:
-    """Shared ReportLab Platypus renderer with a branded terracotta header."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib.colors import HexColor
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-
-    accent = HexColor("#" + branding["accent_hex"])
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="BrandTitle", parent=styles["Title"], textColor=accent, fontSize=22, spaceAfter=6))
-    styles.add(ParagraphStyle(name="SubMuted",   parent=styles["Normal"], textColor=HexColor("#64748b"), fontSize=9))
-    styles.add(ParagraphStyle(name="SectionHead", parent=styles["Heading3"], textColor=accent, spaceBefore=12, spaceAfter=6))
-    styles.add(ParagraphStyle(name="Disclaimer",  parent=styles["Italic"], fontSize=8, textColor=HexColor("#64748b"), spaceBefore=14))
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        leftMargin=1.8 * cm, rightMargin=1.8 * cm,
-        topMargin=1.6 * cm, bottomMargin=1.6 * cm,
-        title=title, author=branding["company_name"],
-    )
-    story = [
-        Paragraph(title, styles["BrandTitle"]),
-        Paragraph(f"{branding['company_name']} · {branding['email']}", styles["SubMuted"]),
-        Spacer(1, 10),
-    ]
-    story.extend(story_builder(styles, accent))
-    doc.build(story)
-    buf.seek(0)
-    return buf
-
-
-def _report_table(data, styles, accent, col_widths=None, right_align_cols=None):
-    from reportlab.platypus import Table, TableStyle
-    from reportlab.lib.colors import HexColor, white
-    right_align_cols = right_align_cols or []
-    t = Table(data, colWidths=col_widths, repeatRows=1)
-    ts = TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), accent),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), white),
-        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE",   (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, HexColor("#f8fafc")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, HexColor("#cbd5e1")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ])
-    for c in right_align_cols:
-        ts.add("ALIGN", (c, 0), (c, -1), "RIGHT")
-    t.setStyle(ts)
-    return t
 
 
 @api.get("/accounting/reports/trial-balance/pdf")
@@ -3895,9 +3735,9 @@ class FixedAssetIn(BaseModel):
     residual_value: float = 0.0
     useful_life_months: int            # straight-line
     depreciation_method: Literal["straight_line"] = "straight_line"
-    asset_account_code: str = "15000"  # PPE asset account (default)
-    accumulated_depr_account_code: str = "15900"
-    depreciation_expense_account_code: str = "65000"
+    asset_account_code: str = "11100"  # Computer Equipment — Cost (default; matches seed)
+    accumulated_depr_account_code: str = "11110"  # Computer Equipment — Accumulated Depreciation
+    depreciation_expense_account_code: str = "82500"  # Depreciation expense
     serial_number: str | None = None
     location: str | None = None
 
@@ -4041,7 +3881,7 @@ class BankAccountIn(BaseModel):
     name: str
     bank: str                          # e.g. "FNB", "Standard Bank"
     account_number: str | None = None
-    gl_account_code: str = "10100"     # links to the Bank account in CoA
+    gl_account_code: str = "21000"     # links to the Bank account in CoA (FNB Current in seed)
     currency: str = "ZAR"
 
 
@@ -4161,9 +4001,30 @@ async def suggest_matches(tid: str, u: dict = Depends(current_user)):
                 "confidence": 0.9 if abs(inv.get("grand_total", 0) - amt) < 0.01 else 0.6,
             })
     else:
-        # match to unposted expenses (unreconciled journal rows aren't tracked here);
-        # surface recent expense journals within amount tolerance
-        pass
+        # Money-out: surface the tenant's recent expense accounts as candidate CoA targets
+        # (user picks the category for reconcile as an expense). We rank by recent usage in journals.
+        recent = await db.journals.find(
+            {"owner_id": u["id"]},
+            {"_id": 0, "lines": 1}
+        ).sort("date", -1).limit(50).to_list(50)
+        usage: dict = {}
+        for j in recent:
+            for ln in j.get("lines") or []:
+                if float(ln.get("debit") or 0) > 0:
+                    usage[ln["account_code"]] = usage.get(ln["account_code"], 0) + 1
+        expense_accts = await db.accounts.find(
+            {"owner_id": u["id"], "type": "expense", "subtype": {"$ne": "header"}},
+            {"_id": 0, "code": 1, "name": 1}
+        ).to_list(200)
+        expense_accts.sort(key=lambda a: (-usage.get(a["code"], 0), a["code"]))
+        for a in expense_accts[:10]:
+            suggestions.append({
+                "type": "expense_account",
+                "id": a["code"],
+                "label": f"{a['code']} · {a['name']}",
+                "amount": amt,
+                "confidence": 0.5 + min(0.4, 0.05 * usage.get(a["code"], 0)),
+            })
     return {"transaction": tx, "suggestions": suggestions}
 
 
@@ -4190,6 +4051,12 @@ async def reconcile_transaction(tid: str, body: dict = Body(...), u: dict = Depe
         inv = await db.invoices.find_one({"id": body.get("invoice_id"), "owner_id": u["id"]}, {"_id": 0})
         if not inv:
             raise HTTPException(404, "Invoice not found")
+        # Guard: bank transaction amount must be within 5% of invoice grand_total
+        # (prevents accidentally marking a R50,000 invoice paid from a R50 bank line).
+        inv_total = float(inv.get("grand_total") or 0)
+        tol = max(1.0, inv_total * 0.05)
+        if abs(amt - inv_total) > tol:
+            raise HTTPException(400, f"Amount mismatch: bank tx R{amt:,.2f} vs invoice R{inv_total:,.2f} (tolerance 5%).")
         # For an invoice receipt: DR Bank, CR Debtors (mirrors the Stripe/PayPal capture flow,
         # but here we debit Bank directly since the money is in the bank account).
         j = JournalIn(

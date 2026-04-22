@@ -214,3 +214,37 @@ Shipped:
 - Verified: `GET /api/` returns service banner; `POST /api/auth/login` returns JWT for demo@climbleadershiplab.com / SherpaDemo2026!; subscription ticker loop started; seed complete.
 - Frontend login page renders the full "Midnight Mountain" branded UI with demo credentials panel visible.
 - **State:** caught up through Phase 2 Batch 6 (SA Accounting). Ready to continue where we left off.
+
+## Session: Apr 22, 2026 — Phase 2 Batch 7 verified + critical fixes + refactor start (iter-9)
+Goal user set: "1 then 5" — (1) end-to-end verify PDFs/bank-rec/assets/receipts, then (5) fix tech debt.
+
+### (1) testing_agent_v3 iter-9 — Batch 7 verification
+- Previous agent shipped code for 4 accounting PDFs + Bank accounts/CSV import/reconcile/unreconcile + Fixed Assets + depreciate + Receipts OCR (Gemini), but **never ran testing_agent_v3** on any of it.
+- Iter-9 wrote `/app/backend/tests/test_phase2_batch7_bank_assets_receipts.py` (33 new tests) → **33/33 PASS**.
+- Full regression: **162 passed + 4 skipped + 2 unrelated PayPal env-fails** (PAYPAL_CLIENT_ID missing, expected). 
+- Security review green: all accounting endpoints owner-scoped. Double-entry invariants verified.
+
+### Critical + high-value fixes applied post-iter-9 (all tests still green)
+1. **CRITICAL — Default CoA codes fixed.** `BankAccountIn.gl_account_code` was `10100` (not in seed) → now `21000` (FNB Current). `FixedAssetIn.{asset_account_code, accumulated_depr_account_code, depreciation_expense_account_code}` were `15000/15900/65000` (none seeded) → now `11100/11110/82500`. This silently broke depreciation + bank-reconcile for any user who accepted defaults.
+2. **Security — owner-scoped dup_hash.** `bank_transactions` import used a GLOBAL dup_hash check (cross-tenant side-channel). Now salted with `u["id"]` and filtered by `owner_id`.
+3. **Guard — reconcile amount tolerance.** `POST /accounting/bank-transactions/{tid}/reconcile?match_type=invoice` now enforces ±5% amount tolerance against the invoice grand_total (prevents a R50 bank line from marking a R50,000 invoice paid).
+4. **Fix — unreconcile journal date.** Was `datetime.now().isoformat()`, now uses the original `tx.date` so prior-month reversals don't bleed into current VAT201.
+5. **Feature — money-out suggest-matches.** The branch was a bare `pass` (always returned empty). Now ranks the tenant's top-10 expense accounts by recent-usage frequency so users get one-click categorisation.
+6. **Flaky audit test fixed.** `test_mutation_writes_audit` now uses `?limit=500` (pagination was already implemented in iter-8 but the test hardcoded the default 100-row cap).
+
+### (5) Tech debt — refactor started (low-risk, pattern-establishing)
+- **Extracted `/app/backend/accounting_data.py`** (123 lines) — SA_VAT_CODES + SA_COA_SEED (66 rows) + ACCOUNT_TYPES + NORMAL_BALANCE + `_D` + `_period_key` (pure data / pure utilities, zero coupling).
+- **Extracted `/app/backend/accounting_pdf.py`** (84 lines) — `fmt_zar` + `pdf_buf_from_story` + `report_table` (pure ReportLab, no db). Backwards-compat aliases exported (`_fmt_zar`, `_pdf_buf_from_story`, `_report_table`).
+- **`server.py`: 4,507 → 4,344 lines** (-163 net lines after imports).
+- **Full regression still 162/168** — zero behavior change. Ruff lint clean on both new modules.
+- Full router split (accounting.py, quotes.py, etc.) deferred — requires a deps.py to break the circular import. Next session.
+
+### Still deferred (documented)
+- Router split of `server.py` (endpoint extraction into `/routers/`) — needs `deps.py` first.
+- PayPal webhook signature verification (`PAYPAL_WEBHOOK_ID`).
+- Real IMAP (awaiting Gmail/Outlook app password), Calendly/Zoom/MS Graph (awaiting sandbox creds).
+
+### Next Action Items
+- Phase 2 Batch D — Provisional Tax IRP6, EMP201 (PAYE/UIF/SDL), Dividends Tax.
+- Phase 2 Batch E — AFS PDF export bundle (IS+BS+CF+notes in one signed PDF).
+- Full router split (deps.py → routers/accounting.py → routers/crm.py …).

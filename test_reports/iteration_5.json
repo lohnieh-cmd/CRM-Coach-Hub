@@ -1,0 +1,46 @@
+{
+  "summary": "Phase 2 batch 3 (Team + Invites + RBAC + IMAP) re-tested after GitHub restore. Full backend regression: 94/94 pytest pass (32 ascent_crm + 18 phase2 + 15 phase2_batch2 + 29 phase2_batch3). All features from the review request verified green: auth login (demo owner), CRM CRUD, pipeline Kanban, Products/Price List, Quotes→Invoice, Stripe Checkout session, Public Lead Forms + GDPR consent, AI Studio (Emergent LLM), Analytics, Automations (stage-change + form-submission triggers), Subscriptions tick + dunning, SEO pages + sitemap.xml, Calendly webhook, Tasks/Email CRUD, Contact timeline, multistep funnel, scheduler status. Batch-3 new: /api/team/members + PATCH/DELETE, /api/team/invites full flow (create→peek→accept→reuse-404→revoke), /api/auth/invite/{token} no-token-echo, /api/auth/accept-invite creates rep w/ team_owner_id=inviter, rep can log in and sees owner's companies/contacts/deals via current_user id→team_owner_id remap, RBAC 403s (rep cannot POST invites, rep cannot PATCH other members), owner can PATCH roles. IMAP config CRUD works; sync error paths return correct 400 (no cfg / no password) and 502 (unreachable host). Startup backfill of team_owner_id verified via /api/auth/me (owner id == team_owner_id). **Both iter-4 backend bugs are now FIXED by E1**: (A) GET /api/audit now uses team-scoped $or query (owner/admin) or u['actor_id'] (rep) instead of u['id'] — rep-authored audit rows are visible; (B) POST /api/email/imap/sync now requires body.password unconditionally (no fallback to stored value) AND server no longer persists plaintext password at rest (save_imap_config blanks doc['password']='' before upsert). I updated 1 stale test assertion to reflect the new, more-secure GET behaviour (password returned as '' instead of masked bullets because nothing is stored).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/team/invites", "issue": "Still returns invite.token in list response; any authed team member can read pending-invite tokens. Carried over from iter-4. Low risk because only owner/admin can create invites and accepted invites are 404 on peek, but tighten by stripping token from list or restricting endpoint to owner/admin."},
+      {"endpoint": "POST /api/email/imap/sync", "issue": "No socket/connect timeout on imaplib.IMAP4_SSL; a slow/hung IMAP server could tie up a worker thread indefinitely. Use socket.setdefaulttimeout() or imaplib.IMAP4.open with a timeout."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ascent_crm.py",
+    "/app/backend/tests/test_phase2.py",
+    "/app/backend/tests/test_phase2_batch2.py",
+    "/app/backend/tests/test_phase2_batch3.py",
+    "/app/test_reports/pytest/iter5_final.xml",
+    "/app/test_reports/pytest/iter5_batch3_rerun.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: strip invite.token from GET /api/team/invites response (carry-over from iter-4).",
+    "OPTIONAL: add socket-level timeout to imaplib calls in _fetch_imap_messages to prevent hung worker threads.",
+    "OPTIONAL: consider splitting server.py (now 2418 lines) into routers/team.py, routers/imap.py, routers/audit.py for maintainability."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew to 2418 lines — urgent to split into FastAPI routers.",
+    "imap_sync has no connect/read timeout; a malicious or slow host can block a worker thread. Wrap in asyncio.wait_for(asyncio.to_thread(...), timeout=30).",
+    "GET /api/team/invites still returns invite.token field — should be stripped in projection for list endpoints; fetch-token-by-id should require owner/admin.",
+    "USER_PUBLIC_PROJECTION constant still duplicated across 6+ queries — extract.",
+    "list_audit team-member lookup is O(n) on every call; consider caching team_member_ids on the request scope."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_batch3.py (relaxed TestIMAPConfig.test_save_and_obfuscate_password — accepts '' or '••••••' because server now hardens by never persisting plaintext pw)",
+    "/app/backend/tests/test_phase2_batch2.py (added default URL fallback to REACT_APP_BACKEND_URL env lookup so test collection no longer crashes when env var is absent)"
+  ],
+  "success_rate": {"backend": "100% (94/94 pass)", "frontend": "not tested this iteration (backend-only per request)"},
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (seeded owner) — /app/memory/test_credentials.md verified correct",
+  "seed_data_creation": "Tests create TEST_rep_*@example.com invites (auto-cleaned by test_cleanup_accepted_rep + test_revoke_pending_invite fixtures). Transient IMAP config written and deleted within TestIMAPConfig. No stray data expected; any leftover invites have status='accepted' and are harmless.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-5 confirms the post-restore backend is 100% green (94/94). Both iter-4 bugs (audit-attribution filter + IMAP sync 400 bypass + IMAP plaintext-at-rest) are fixed. Remaining items are all OPTIONAL hardening (timeouts, token-field in list response, server.py split). To re-run: `export REACT_APP_BACKEND_URL=https://ascent-windows.preview.emergentagent.com && pytest /app/backend/tests/ -v`. If moving to frontend regression, test data-testids documented in iter-4 still apply (nav-team, invite-btn, invite-email, invite-role, invite-create, invite-result, accept-invite, accept-name, accept-password, accept-submit, imap-form, imap-host, imap-username, imap-password, imap-save, imap-sync, imap-result).",
+  "rca_of_the_issue": "Iter-4 BUG A (audit filter): server.py list_audit was using u['id'] (team_owner_id after remap) which meant rep-authored audit rows (actor_id=real rep uid) were invisible to everyone. FIXED in iter-5: list_audit now uses {actor_id: {$in: <all team member ids>}} for owner/admin and {actor_id: u['actor_id']} for reps. Verified by TestAuditAttribution.test_rep_mutation_writes_audit_with_rep_actor_id passing. Iter-4 BUG B (IMAP 400 bypass + plaintext-at-rest): save_imap_config was storing the plaintext password and imap_sync was falling back to it when body omitted password, bypassing the 400 contract and creating a data-at-rest security problem. FIXED in iter-5: save_imap_config sets doc['password']='' before upsert (never stores plaintext), and imap_sync raises 400 'Provide your IMAP app password' if body.password is missing. Verified by test_imap_sync_without_password_returns_400 passing and GET returning password='' for a saved config."
+}

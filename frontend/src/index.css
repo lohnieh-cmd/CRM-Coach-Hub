@@ -1,0 +1,428 @@
+@import url("https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&f[]=manrope@400,500,600,700,800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --bg: #0b0f15;
+    --surface: #161d26;
+    --surface-2: #212a36;
+    --border: #283341;
+    --border-strong: #4f7c8a;
+    --text: #f8fafc;
+    --text-dim: #94a3b8;
+    --terra: #e26e4a;
+    --terra-hover: #c85a3a;
+    --sage: #4f7c8a;
+    --good: #10b981;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+}
+
+html,
+body,
+#root {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+}
+
+body {
+    margin: 0;
+    background-image:
+        radial-gradient(1200px 600px at 85% -10%, rgba(226, 110, 74, 0.08), transparent 60%),
+        radial-gradient(900px 500px at -10% 100%, rgba(79, 124, 138, 0.08), transparent 60%);
+}
+
+h1,
+h2,
+h3,
+h4,
+.font-head {
+    font-family: "Cabinet Grotesk", "Manrope", ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.01em;
+}
+
+.label-caps {
+    font-family: "Manrope", sans-serif;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 600;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+
+/* Topographic motif overlay */
+.topo-bg {
+    position: relative;
+    overflow: hidden;
+}
+.topo-bg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='800' viewBox='0 0 800 800'><g fill='none' stroke='%234f7c8a' stroke-width='0.6' opacity='0.12'><circle cx='400' cy='400' r='60'/><circle cx='400' cy='400' r='110'/><circle cx='400' cy='400' r='170'/><circle cx='400' cy='400' r='240'/><circle cx='400' cy='400' r='320'/><circle cx='400' cy='400' r='410'/></g></svg>");
+    background-size: 700px 700px;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Altitude badge */
+.altitude {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: "Manrope";
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+.altitude .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+}
+.altitude.basecamp {
+    color: #a8c3cc;
+    border-color: #2f4752;
+}
+.altitude.basecamp .dot {
+    background: #7ba8b5;
+}
+.altitude.ascent {
+    color: #f4b89d;
+    border-color: #5a3524;
+}
+.altitude.ascent .dot {
+    background: var(--terra);
+}
+.altitude.summit {
+    color: #fde8d5;
+    border-color: #9a4b2b;
+    background: linear-gradient(180deg, #2a1812 0%, #161d26 100%);
+}
+.altitude.summit .dot {
+    background: #ffb98a;
+}
+.altitude.won {
+    color: #bff3d7;
+    border-color: #0e5a3e;
+}
+.altitude.won .dot {
+    background: var(--good);
+}
+.altitude.lost {
+    color: #fca5a5;
+    border-color: #5a1f1f;
+}
+.altitude.lost .dot {
+    background: var(--bad);
+}
+
+/* Elevation-gain indicator */
+.elev {
+    display: flex;
+    gap: 3px;
+    align-items: flex-end;
+    height: 14px;
+}
+.elev span {
+    width: 4px;
+    background: var(--border-strong);
+    border-radius: 1px;
+    opacity: 0.3;
+}
+.elev span.on {
+    opacity: 1;
+    background: linear-gradient(180deg, var(--terra) 0%, #f4b89d 100%);
+}
+.elev span:nth-child(1) {
+    height: 3px;
+}
+.elev span:nth-child(2) {
+    height: 6px;
+}
+.elev span:nth-child(3) {
+    height: 9px;
+}
+.elev span:nth-child(4) {
+    height: 12px;
+}
+.elev span:nth-child(5) {
+    height: 15px;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: "Manrope";
+    font-weight: 600;
+    font-size: 0.875rem;
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition:
+        background 160ms ease,
+        border-color 160ms ease,
+        transform 160ms ease,
+        color 160ms ease;
+    cursor: pointer;
+    line-height: 1;
+    color: var(--text);
+    background: transparent;
+}
+.btn-primary {
+    background: var(--terra);
+    color: #fff;
+    border-color: var(--terra);
+}
+.btn-primary:hover {
+    background: var(--terra-hover);
+    border-color: var(--terra-hover);
+    transform: translateY(-1px);
+}
+.btn-secondary {
+    border-color: var(--border);
+    background: var(--surface);
+}
+.btn-secondary:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+}
+.btn-ghost:hover {
+    background: var(--surface);
+}
+.btn-danger {
+    border-color: #5a1f1f;
+    color: #fca5a5;
+}
+.btn-danger:hover {
+    background: #2a1212;
+}
+
+/* Card */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition:
+        border-color 160ms ease,
+        transform 160ms ease,
+        background 160ms ease;
+}
+.card:hover {
+    border-color: var(--border-strong);
+}
+.card-interactive:hover {
+    transform: translateY(-2px);
+}
+
+/* Inputs */
+.input,
+.textarea,
+.select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-family: "Manrope";
+    font-size: 0.875rem;
+    transition:
+        border-color 160ms ease,
+        box-shadow 160ms ease;
+}
+.input:focus,
+.textarea:focus,
+.select:focus {
+    outline: none;
+    border-color: var(--terra);
+    box-shadow: 0 0 0 3px rgba(226, 110, 74, 0.18);
+}
+.textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+/* Table */
+.atable {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.875rem;
+}
+.atable th {
+    text-align: left;
+    padding: 14px 16px;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+}
+.atable td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+.atable tr:hover td {
+    background: var(--surface-2);
+}
+
+/* Sidebar link */
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition:
+        background 160ms ease,
+        color 160ms ease;
+    cursor: pointer;
+}
+.nav-link:hover {
+    color: var(--text);
+    background: var(--surface);
+}
+.nav-link.active {
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+}
+.nav-link.active::before {
+    content: "";
+    width: 3px;
+    height: 18px;
+    border-radius: 2px;
+    background: var(--terra);
+    margin-right: -4px;
+}
+
+/* Kanban */
+.kanban-col {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    min-width: 280px;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 220px);
+}
+.kanban-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    cursor: grab;
+    transition:
+        border-color 160ms ease,
+        transform 160ms ease;
+}
+.kanban-card:hover {
+    border-color: var(--border-strong);
+    transform: translateY(-1px);
+}
+.kanban-card.dragging {
+    opacity: 0.5;
+}
+
+/* Subtle topo card */
+.topo-card {
+    background-image:
+        linear-gradient(180deg, rgba(22, 29, 38, 0.9), rgba(22, 29, 38, 1)),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='200' viewBox='0 0 600 200'><g fill='none' stroke='%234f7c8a' stroke-width='0.5'><path d='M0,140 C100,120 200,100 300,110 C400,120 500,140 600,130'/><path d='M0,160 C100,140 200,120 300,130 C400,140 500,160 600,150'/><path d='M0,180 C100,160 200,140 300,150 C400,160 500,180 600,170'/></g></svg>");
+    background-size: cover;
+    background-position: center;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+}
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+/* Utilities */
+.divider {
+    height: 1px;
+    background: var(--border);
+}
+.chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+.gradient-heading {
+    background: linear-gradient(180deg, #fff 0%, #cdd6e0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* Shadcn variables (minimal) */
+@layer base {
+    :root {
+        --background: 218 30% 6%;
+        --foreground: 210 40% 98%;
+        --card: 218 25% 11%;
+        --card-foreground: 210 40% 98%;
+        --primary: 15 73% 59%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 218 20% 18%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 218 20% 18%;
+        --muted-foreground: 215 20% 65%;
+        --accent: 192 28% 43%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 215 25% 21%;
+        --input: 215 25% 21%;
+        --ring: 15 73% 59%;
+        --radius: 0.5rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+}

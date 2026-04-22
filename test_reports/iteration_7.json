@@ -1,0 +1,51 @@
+{
+  "summary": "Phase 2 Batch 5 (quote valid_days auto-compute, .docx export, PDF attachments for quotes/invoices, company→contacts link) is fully green on backend (23/23 new tests). Full regression suite 127/128 (one pre-existing flaky audit test). Frontend smoke: Companies contacts column + drawer + chips render correctly with all 12 expected data-testids; Quotes Word button (data-testid=quote-word-*) renders 15 instances; Quote edit modal exposes valid_days, valid_until, preview text 'Auto-calculated valid-until: —', and the Attachments card (data-testid=attachments-quotes) populated with previously uploaded sample.pdf. Two frontend gaps confirmed: (1) Company edit modal does NOT expose data-testid=company-delete (or click on company-edit-* did not surface the expected modal — modal markup needs main agent review), (2) Invoices page rows do not expose data-testid=invoice-edit-* so the attachments-invoices card could not be visually confirmed end-to-end. Cross-tenant isolation verified for both download and delete on attachments. Word .docx round-trip via python-docx confirms ZIP magic, Quote_<num>.docx Content-Disposition, and quote number visible in document text. Audit row 'export_docx' written. UPLOAD_ROOT writes confirmed at /app/backend/uploads/<owner>/quotes/<rid>/<att>.pdf. No horizontal scroll on Companies/Quotes/Invoices.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /{resource}/{rid}/attachments", "issue": "Catch-all path matches any first segment (e.g. /api/contacts/{id}/attachments returns 400 'Not attachable' instead of 404). Works as intended but leaks the resource enumeration surface. Consider explicit /quotes/.../attachments + /invoices/.../attachments routes per the optional note in the request brief."},
+      {"endpoint": "GET /api/audit", "issue": "Endpoint caps response at 200 rows. Pre-existing flaky test test_ascent_crm.py::TestAudit::test_mutation_writes_audit now consistently fails because total audit count exceeds 200 (before==after==200). Not caused by batch 5 — fix is either bump cap, add ?limit param, or change test to filter by action."},
+      {"endpoint": "PUT /api/quotes/{id}", "issue": "Requires full QuoteIn body (line_items, totals) — partial PATCH-style update of just valid_days returns 422. Acceptable but UI must always re-send full body when bumping valid-days."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Companies edit modal", "issue": "data-testid=company-delete not found inside edit modal after clicking company-edit-{id}. Either the testid attribute is not rendered or the Edit button does not open the modal expected by the spec. Manual screenshot needed by main agent.", "selector": "[data-testid=\"company-delete\"]", "priority": "MEDIUM"},
+      {"component": "Invoices row", "issue": "No data-testid=invoice-edit-{id} on invoice rows, so the invoice edit modal could not be opened in tests. attachments-invoices card therefore not visually verified (backend POST /api/invoices/{id}/attachments works fine).", "selector": "[data-testid^=\"invoice-edit-\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Quotes edit modal", "issues": ["React hydration warning: '<span> cannot be a child of <option>' originating in Quotes.jsx. Cosmetic but flagged by React in production console — wrap option labels in plain text instead of <span>."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_batch5.py",
+    "/app/test_reports/pytest/iter7_batch5.xml",
+    "/app/test_reports/pytest/iter7_all.xml"
+  ],
+  "action_items": [
+    "FRONTEND: add data-testid=\"company-delete\" to the red Delete button inside Companies edit modal (or confirm modal markup matches spec).",
+    "FRONTEND: add data-testid=\"invoice-edit-{id}\" to the Edit button on each Invoices row so the attachments-invoices card is reachable in tests.",
+    "BACKEND (optional, mentioned in brief): tighten /{resource}/{rid}/attachments to explicit /quotes/... and /invoices/... routes to avoid catch-all routing surface.",
+    "BACKEND (optional): bump /api/audit cap or add ?limit / ?after_id paging to fix the now-permanently-failing test_mutation_writes_audit.",
+    "FRONTEND: fix React hydration warning in Quotes.jsx (<span> inside <option>)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2844 lines — router split into /app/backend/routers/{quotes,invoices,attachments,...}.py is overdue (flagged in iter-6 too).",
+    "ALLOWED_ATTACHMENT_SUFFIXES is a set checked against suffix.lower() but the file is read into memory before size validation — a 14.99 MB upload still consumes RAM. Consider reading in chunks and aborting at MAX_ATTACHMENT_BYTES.",
+    "Disk path /app/backend/uploads/<owner>/<resource>/<rid>/<att_id>.<suffix> is rebuilt from filename suffix but the DB stores the full disk_path — if UPLOAD_ROOT env var changes between runs, old rows become unrecoverable. Consider storing only the relative path.",
+    "/api/quotes/{id}/export/docx imports python-docx INSIDE the handler on every call (small cold-start cost). Move to module top.",
+    "delete_attachment best-effort unlinks the file but does not verify the parent directory cleanup — over time /app/backend/uploads/<owner>/quotes/<rid>/ accumulates empty dirs. Minor.",
+    "Catch-all POST /{resource}/{rid}/attachments would match arbitrary collections if ATTACHABLE were ever expanded inadvertently. Explicit per-resource routes are safer."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_batch5.py (new, 23 tests covering valid_days, docx export, attachments CRUD, company contacts, routing-conflict guards)"
+  ],
+  "success_rate": {"backend": "100% on Batch 5 (23/23). 99.2% overall (127/128 — single pre-existing flaky audit test).", "frontend": "75% — 4 of 6 spec items confirmed in DOM. company-delete testid missing in company edit modal; invoice-edit-* testid missing on invoice rows."},
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (seeded owner). Secondary owner created per-run via /api/auth/signup with TEST_owner_<uuid>@example.com / Secondary2026!.",
+  "seed_data_creation": "Each run creates: 1-2 TEST-Q-* quotes, 1 TEST-INV-* invoice, 1 TEST_owner_* secondary user, 1 TEST contact tied to first company, and uploads two TINY pdf attachments (signed_quote.pdf to a quote, signed_invoice.pdf to an invoice). The quote attachment is deleted at end of test; the invoice attachment is left intact for cross-tenant verification. Disk artefacts in /app/backend/uploads/<owner>/invoices/<rid>/ accumulate; consider periodic cleanup if disk fills.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-7 backend Batch 5 is 23/23 green. To re-run: export REACT_APP_BACKEND_URL=https://ascent-windows.preview.emergentagent.com && pytest /app/backend/tests/test_phase2_batch5.py -v. The single regression failure (test_ascent_crm.py::TestAudit::test_mutation_writes_audit) is a pre-existing data-volume issue, not a Batch 5 regression — audit list endpoint caps at 200 rows. Two frontend testid gaps remain: company-delete inside company edit modal, and invoice-edit-{id} on invoice rows. Backend attachments + delete + cross-tenant isolation all pass. The catch-all /{resource}/{rid}/attachments routing was tested for conflicts (no impact on /quotes/{id}/export/docx or /companies); main agent may still want to tighten to explicit routes per the brief's note.",
+  "rca_of_the_issue": "Initial PUT-quote test sent only {valid_days, valid_until=null} → 422 because update_quote uses QuoteIn (Pydantic strict). Fixed by sending full body. Initial second-owner fixture used /api/auth/register (404) instead of the actual /api/auth/signup endpoint; corrected after grepping server.py. Cross-tenant + foreign-company tests went from SKIPPED to PASSED after the fix."
+}

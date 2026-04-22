@@ -1,0 +1,90 @@
+{
+  "theme": "Dark",
+  "archetype": "Archetype 5 (Jewel & Luxury) & Archetype 1 (Organic & Earthy) Hybrid - 'Midnight Mountain'",
+  "colors": {
+    "background": "#0B0F15",
+    "surface": "#161D26",
+    "surface_hover": "#212A36",
+    "border": "#283341",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#94A3B8",
+    "primary_accent": "#E26E4A",
+    "primary_accent_hover": "#C85A3A",
+    "secondary_accent": "#4F7C8A",
+    "success": "#10B981",
+    "warning": "#F59E0B",
+    "danger": "#EF4444"
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "Manrope",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight font-bold",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-semibold",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed",
+      "label": "text-xs tracking-[0.2em] uppercase font-semibold"
+    }
+  },
+  "layout_spacing": {
+    "philosophy": "Dense but aspirational. Dashboard grids use Mode B 'Control Room' but with slightly more generous padding to reduce fatigue. 'Control Room' grid with tight gaps for data, generous padding for containers.",
+    "container_padding": "p-6 sm:p-8",
+    "grid_gap": "gap-6",
+    "card_radius": "rounded-lg"
+  },
+  "components": {
+    "sidebar": "Darker than main content (#0B0F15). Right border 1px solid #283341. Includes an 'Elevation Status' visual.",
+    "cards": "Flat solid surfaces (bg-[#161D26]). 1px subtle border (#283341). No heavy shadows. On hover: slight lift (-translate-y-1) and border color darkens to #4F7C8A.",
+    "buttons": "Primary: Terracotta (#E26E4A) background, bold white text. Secondary: Minimalist 1px border (#283341) with text #F8FAFC.",
+    "kanban_board": "Columns defined by subtle vertical grid lines. Cards are dense. Tag colors match stage 'altitudes' (Basecamp, Ascent, Summit).",
+    "tables": "Shadcn based. Left aligned. Generous row padding (py-4). Hover state on rows.",
+    "forms": "Left-aligned. Input fields use flat background with 1px borders, subtle focus ring (ring-[#E26E4A])."
+  },
+  "signature_elements": [
+    "Elevation-Gain Indicator: Progress bars styled as a stepped gradient or altitude meter (e.g., deal probability moving up).",
+    "Topographic Motif: Extremely subtle (5% opacity) SVG topographic contour lines on empty states, auth screens, or marketing sections.",
+    "Altitude Badges: Small pill tags using elevation terms (e.g., 'Basecamp' for new leads, 'Summit' for closed won) instead of generic text."
+  ],
+  "visual_enhancers": {
+    "glassmorphism": "Used ONLY for sticky headers. bg-[#0B0F15]/70, backdrop-blur-xl, border-b border-[#283341].",
+    "icons": "Phosphor Icons (@phosphor-icons/react) for a high-end, duotone look.",
+    "borders": "Grid Borders (The 'Technical' Look) for data-heavy sections. border-collapse style layout."
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1705873339772-605ce4d98e99?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwzfHxtb3VudGFpbiUyMHBlYWslMjBzdW5yaXNlfGVufDB8fHx8MTc3NjcxMjA4Mnww&ixlib=rb-4.1.0&q=85",
+        "category": "hero",
+        "description": "Mountain peak sunrise for aspirational empty states or auth screen"
+      },
+      {
+         "url": "https://images.unsplash.com/photo-1650668300370-3ee2f17d1589?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwyfHxtb3VudGFpbiUyMHBlYWslMjBzdW5yaXNlfGVufDB8fHx8MTc3NjcxMjA4Mnww&ixlib=rb-4.1.0&q=85",
+         "category": "empty_state",
+         "description": "Sunset over mountain for 'No Deals Found' or completed tasks"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1640244676144-63c901998a83?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwyfHx0ZWFtJTIwY2xpbWJpbmclMjBtb3VudGFpbnxlbnwwfHx8fDE3NzY3MTIwODJ8MA&ixlib=rb-4.1.0&q=85",
+        "category": "onboarding",
+        "description": "Team hiking rocky hill for 'Invite Your Team' screen"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1774646598595-fa600737ecec?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMHRvcG9ncmFwaGljJTIwY29udG91cnxlbnwwfHx8fDE3NzY3MTIwODJ8MA&ixlib=rb-4.1.0&q=85",
+        "category": "texture_background",
+        "description": "Topographic map for subtle card backgrounds (use at 5% opacity and grayscale in CSS)"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the 'Midnight Mountain' Dark Theme palette. Use #E26E4A (Terracotta) for primary actions.",
+    "Do NOT use 'Inter' font. Import and use 'Cabinet Grotesk' for headings and 'Manrope' for body text.",
+    "Run 'yarn add @phosphor-icons/react' and use Phosphor Icons for all UI icons to maintain a premium look.",
+    "Do NOT use standard Shadcn Card components with their default heavy shadows and white backgrounds. Strip them down to use flat, 1px bordered divs (bg-[#161D26] with border-[#283341]) to achieve the Grid Borders 'Technical' look.",
+    "Implement 'Altitude Badges' in the Kanban board and CRM tables (e.g., tags reading 'Basecamp', 'Ascent', 'Summit').",
+    "Add 'data-testid' to all interactive elements following kebab-case role-based conventions.",
+    "Do not center-align forms and dense information. Left-align them for readability.",
+    "For empty states, overlay the provided topographic image or mountain peak image with a heavy dark gradient (bg-black/70) to ensure text readability.",
+    "Ensure hover states explicitly define text color (e.g., hover:text-white) and focus states have high contrast.",
+    "Apply 'Grid Layout Technical Rules' - ensure grid items are direct children, use gap-6 for macro layout, and dense spacing inside cards."
+  ]
+}

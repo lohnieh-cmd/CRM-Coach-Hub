@@ -1,0 +1,75 @@
+{
+  "summary": "Phase 2 testing of Ascent CRM. Backend: 17/18 new Phase 2 tests pass + 32/32 regression tests pass (49/50 = 98%). One real backend bug found: _run_automations is NOT hooked into POST /api/forms/{slug}/submit despite the inline comment at server.py:1851 claiming it is — form_submission triggers will never fire. Frontend: all 4 new nav/pages load (Subscriptions, Automations, SEO, Integrations); New Subscription modal opens; New Automation modal renders trigger + action selectors and saves; SEO 'AI generate' populates a valid 1786-char schema.org JSON-LD via Gemini 3; Calendly webhook URL element renders with the correct full /api/webhook/calendly URL; sitemap URL renders correctly. Regression bonus: previous-iteration kanban-grouping bug is FIXED — Pipeline now shows deals in their columns (Discovery=6, Intake=2, Proposal Sent=2, Engaged=1, Closed Won=1).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/forms/{slug}/submit",
+        "issue": "_run_automations is not invoked here. submit_form (server.py:769-822) only persists the contact + submission and never fires form_submission triggers. Comment at line 1851 says 'hook automation directly into stage-change and form-submit is done inline' but only stage-change (move_deal at line 468) and calendly_webhook (line 1846) actually call _run_automations. Add: `await _run_automations(form['owner_id'], 'form_submission', {'slug': slug}, {'entity_type':'contact','entity_id': contact_id, 'contact_id': contact_id})` after the audit() call.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/contacts/{id} and GET /api/invoices/{id}",
+        "issue": "Both return 405 Method Not Allowed — there are no GET-by-id endpoints (only collection GET). Tests had to fetch via list. Consider adding for REST consistency."
+      },
+      {
+        "endpoint": "POST /api/automations",
+        "issue": "Accepts trigger.config={} and matches anything (per spec). Confirmed working but not documented in API responses; consider adding a 'matches_any: true' flag in the rule echo so UI can warn on overly broad rules."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Subscriptions.jsx product <select> (line 110)",
+        "issue": "Same React hydration warning flagged in iteration 1 still present here: `<span>` is rendered as a child of `<option>` inside the product dropdown. Browser console emits 'In HTML, <span> cannot be a child of <option>. This will cause a hydration error.' Wrap the option text directly without span / fmtMoney wrapper.",
+        "selector": "[data-testid=sub-product] option",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Lead form → automation",
+        "issue": "Automation rules with trigger.type=form_submission never fire from /forms/{slug}/submit (root cause: missing _run_automations call). UI lets user save such rules but they will silently no-op on real submissions; only the manual 'Test run' button in Automations.jsx exercises them.",
+        "affected_selectors": ["[data-testid=automation-form]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Integrations page Calendly webhook URL block",
+        "issues": ["Uses window.location.origin to build the URL (Integrations.jsx:41). Works in this preview because frontend + /api share a host, but if main agent ever decouples them the URL will be wrong. Recommend using API_BASE from @/api (which already comes from REACT_APP_BACKEND_URL) for consistency with SEOTools.jsx."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2.py",
+    "/app/backend/tests/test_ascent_crm.py",
+    "/app/test_reports/pytest/phase2_results.xml"
+  ],
+  "action_items": [
+    "Hook _run_automations into POST /api/forms/{slug}/submit so form_submission triggers actually fire (1-line fix at server.py ~line 820, after audit()).",
+    "Fix the <span> inside <option> in Subscriptions.jsx product dropdown (eliminate hydration warning).",
+    "Optional: switch Integrations.jsx calendly URL to use API_BASE from @/api instead of window.location.origin.",
+    "Optional: add GET /api/contacts/{id} and GET /api/invoices/{id} endpoints for REST consistency."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1862 lines — well over the 700-line guideline. Phase 2 block (Subscriptions, Automations, SEO, Calendly) is a clean candidate to extract into routers/phase2_*.py modules.",
+    "Comment at server.py:1851 is misleading — claims automation is hooked into both stage-change and form-submit but form-submit hook is missing. Either fix the hook or update the comment.",
+    "_run_automations matches when trigger.config is empty/None — that's intentional per spec but worth documenting next to the function so future devs don't 'fix' it.",
+    "Schema-suggest endpoint silently strips ```json fences via string-slicing; if model returns malformed fences this could mangle output. Consider regex or a try/except around json.loads to validate before returning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2.py (new — 18 Phase 2 cases)"
+  ],
+  "success_rate": {
+    "backend": "98% (49/50: 17/18 phase2 + 32/32 regression)",
+    "frontend": "~95% (all 4 new pages render; AI generate works; 1 known hydration warning)"
+  },
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (auto-seeded)",
+  "seed_data_creation": "Created TEST_-prefixed subscriptions, automations, contacts, deals, SEO pages, and Calendly webhook contacts. Some left in DB for inspection (subs_table, kanban now show TEST rows).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent adds the _run_automations call to submit_form, re-run pytest backend/tests/test_phase2.py::TestAutomations::test_form_submission_trigger to confirm. The other 17 Phase 2 cases and all 32 regression cases already pass. Frontend Pipeline kanban now correctly groups deals by pipeline_stage_id (iteration 1 bug fixed). React hydration <span>-in-<option> warning persists in Subscriptions.jsx (and Pipeline.jsx per iter1).",
+  "rca of the issue": "form_submission trigger silently never fires because Phase 2's automation hook was inserted into move_deal (line 468) and calendly_webhook (line 1846) but the corresponding hook in submit_form (line 769) was forgotten — the file's own comment at line 1851 implies it was done. Reproduction: create automation {trigger:{type:'form_submission',config:{slug:'discovery'}},actions:[{type:'create_task',config:{name:'X'}}],enabled:true}, then POST /api/forms/discovery/submit with consent_given=true; GET /api/automations shows run_count is NOT incremented and no task is created. Fix: append `try: await _run_automations(form['owner_id'], 'form_submission', {'slug': slug}, {'entity_type':'contact','entity_id': contact_id, 'contact_id': contact_id}); except Exception as e: log.warning(...)` after the audit() call in submit_form."
+}

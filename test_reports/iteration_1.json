@@ -1,0 +1,65 @@
+{
+  "summary": "First-iteration full-stack test of Ascent CRM. 32/32 backend pytest cases pass after fixing one real ObjectId-leak bug in the audit() helper. Frontend critical flows verified: login (Midnight Mountain dark theme rgb(11,15,21)), dashboard, pipeline kanban (7 stages with altitude badges Basecamp/Ascent/Summit/Closed Won/Closed Lost), AI Studio (Gemini 3 generates 688-char draft with Fields-Used panel showing brand_voice + products + incoming_email grounding entities), and public lead form /f/discovery loads without auth. All 11 module routes load without error. Stripe checkout returns a real https session URL. Quote->Invoice flow computes totals correctly and produces INV-YYYY-NNNN numbering.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/audit (and indirectly every mutation)",
+        "issue": "audit() stored Motor-mutated docs which contained nested BSON ObjectId in `after`, making GET /api/audit return HTTP 500 (jsonable_encoder fails). Defensive fix applied (recursive _strip_oid in audit()) and 5 corrupted DB rows cleaned. Root cause: _insert() passes `doc` to audit() AFTER insert_one() injected `_id`. Recommend also stripping _id at the end of _insert() return path or doing copy-before-insert.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/forms/discovery/submit",
+        "issue": "Accepts submissions with consent_given=false (returns 200). Consent should be required before storing PII per GDPR. Currently no validation — risk for privacy compliance."
+      },
+      {
+        "endpoint": "/api/auth/signup",
+        "issue": "Email is silently lowercased — fine, but not documented; consider returning 400 on uppercase to make intent explicit, or document behaviour."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Dashboard 'Altitude Map / Pipeline by stage' + Pipeline Kanban column counts",
+        "issue": "All 7 stage rows show count 0 and $0.00 even though 'Open Pipeline' KPI shows $116,400.00 / 4 deals open. Kanban columns also show 0 deal cards. Likely the frontend groups deals by `stage_id` while backend stores `pipeline_stage_id` — field-name mismatch. Verify the Pipeline.jsx + Dashboard.jsx aggregation key matches Deal model field `pipeline_stage_id`.",
+        "selector": "[data-testid='stage-distribution'], [data-testid='kanban-board']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Console (all pages with sidebar)",
+        "issues": ["React hydration warning: a <span> is being rendered as a child of <option>. Affects accessibility/console hygiene; check Pipeline.jsx deal-stage <option> children that include altitude badge spans."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ascent_crm.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix Dashboard altitude-map and Pipeline kanban grouping to use Deal.pipeline_stage_id (not stage_id) so cards appear in their columns.",
+    "Strip <span> children from inside <option> elements (deal-stage <select>) to silence React hydration warning.",
+    "Enforce consent_given=true on /api/forms/{slug}/submit (return 400 otherwise) for GDPR compliance.",
+    "Optionally harden _insert() to copy doc before insert_one to keep callers from receiving _id-mutated dicts."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1384 lines — recommend splitting into routers/ (auth, crm, billing, ai, gdpr) to stay <700 LOC per file.",
+    "_insert() returns the Motor-mutated dict (with _id) to callers. Currently FastAPI's response model strips it, but the same dict is also passed to audit(), where it leaked as nested ObjectId — fixed in audit() but the root pattern is fragile.",
+    "Ensure every mutating endpoint that writes audit copies/serialises payload before persistence to avoid future ObjectId/datetime serialisation bugs."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (added _strip_oid helper + applied inside audit())",
+    "/app/backend/tests/test_ascent_crm.py (new pytest suite, 32 cases)"
+  ],
+  "success_rate": {"backend": "100% (32/32)", "frontend": "~95% (1 grouping display bug)"},
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (auto-seeded)",
+  "seed_data_creation": "Used auto-seeded demo data only. Created TEST_-prefixed companies/contacts during CRUD tests. AI generations and audit entries also accumulated.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend audit ObjectId bug already fixed; if main agent rewrites _insert to copy doc, re-run pytest to confirm. Frontend grouping bug is in Pipeline.jsx + Dashboard.jsx — they likely aggregate deals by `d.stage_id` but Deal model now uses `d.pipeline_stage_id`. After fix, verify kanban shows the seeded deals in their columns and the Altitude Map widget shows non-zero counts.",
+  "rca of the issue": "TestAudit/list_audit returned 500 because Motor's insert_one mutates the supplied dict to attach `_id` (BSON ObjectId). _insert() then passes that mutated dict to audit() which stores `after`={..., _id: ObjectId(...)}. GET /api/audit projects out the top-level _id, but nested ObjectId inside `after` still trips fastapi.encoders.jsonable_encoder. Mitigation: recursive _strip_oid before insertion + one-time DB cleanup of the 5 already-poisoned rows."
+}

@@ -1,0 +1,48 @@
+{
+  "summary": "Phase 2 batch 2 Ascent CRM tested end-to-end. Backend: 64/64 pass + 1 skipped (test_phase2_batch2.py = 14 pass + 1 skip; full regression: test_phase2.py 18/18, test_ascent_crm.py 32/32 — 98.5% including the previously-failing form_submission automation trigger that E1 patched). Frontend: Tasks page, Contact detail (/contacts/:id), email logging, AI-draft-reply (Gemini 3 returned grounded 469-char draft), Edit-modal regression, Lead Form Single↔Multi-step toggle with funnel-builder/add-step/branches UI — all working. The previous iteration's HIGH-priority bug (form_submission trigger not firing) is FIXED and re-verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/forms/{id}", "issue": "Endpoint does not exist (only POST/GET/GET-public/POST-submit/GET-submissions are defined). Prevents cleanup of test forms and hides a minor REST gap. Suggest adding a soft-delete route for parity with contacts/companies/subscriptions."},
+      {"endpoint": "GET /api/contacts/{id} / GET /api/invoices/{id}", "issue": "Still return 405 (carry-over from iter-2). Detail pages currently fetch via list — fine for small seed, but won't scale."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sidebar nav + routes", "issues": ["Lead Forms nav-item routes to /forms while backend endpoint family is /api/forms — fine functionally, but the page component is named LeadForms; aligning the URL to /lead-forms (or renaming the component) would remove future confusion."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_batch2.py",
+    "/app/backend/tests/test_phase2.py",
+    "/app/backend/tests/test_ascent_crm.py",
+    "/app/test_reports/pytest/all_results.xml",
+    "/app/test_reports/pytest/phase2_batch2_results.xml"
+  ],
+  "action_items": [
+    "Optional: add DELETE /api/forms/{id} for cleanup parity.",
+    "Optional: rename /forms route to /lead-forms (or update the file) for consistency with the component name.",
+    "Carry-over: add GET /api/contacts/{id} + /api/invoices/{id} when you touch server.py next."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2066 lines — still well over the 700-line guideline. High time to split into routers/ (tasks, emails, funnels, subscriptions_scheduler, automations, seo).",
+    "_subscription_ticker_loop catches-all Exception but only logs — if the cursor query ever errors in a row, the whole tick is skipped without metrics; consider per-sub try/except so one bad row doesn't block others.",
+    "POST /api/emails increments interaction_count via $inc but does not also push an audit entry for the contact touch — minor observability gap.",
+    "TaskIn drops populated `related_entity_type/id` on PATCH: update_task only allows title/status/due_date/notes/assignee_id, so reparenting a task to another contact is impossible today. Documented behavior, but UI does not expose it so low priority.",
+    "FunnelBranch.equals is typed str, but funnel fields can be checkboxes (bool) — string comparison will silently miss branches if UI ever sends booleans; consider Any or explicit coercion."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_batch2.py (new — 15 test cases: Tasks CRUD 5, EmailLog 3, Timeline 1, Scheduler 1, Funnel 4, AI reply 1)"
+  ],
+  "success_rate": {
+    "backend": "98.5% (64 pass / 1 skip — 0 failures)",
+    "frontend": "100% on the 7 tested flows (Tasks, Contact-list→Detail, Log-email, AI-draft-reply, Edit-regression, Lead Forms funnel toggle, add-step)"
+  },
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (auto-seeded on backend startup)",
+  "seed_data_creation": "Created TEST_-prefixed tasks, emails, and one TEST lead form via API + 2 UI_TEST tasks + 1 UI_TEST inbound email via Playwright. Funnel form left in DB because DELETE endpoint is missing.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-3 green across the board. Key verifications: (1) _run_automations IS now hooked into submit_form (server.py:858) — form_submission triggers fire and run_count increments. (2) /api/scheduler/status returns {running:true, tick_seconds:300, last_run_at, last_run_processed}. (3) Gemini 3 reply draft endpoint returns draft/fields_used/questions_for_user/grounding_fields and references the contact entity as expected. (4) /contacts/:id timeline uses existing GET /api/contacts/{id}/timeline. (5) Frontend route for lead forms is /forms (sidebar testid nav-lead-forms). Cleanup: no destructive leftover data; TEST_ prefix used throughout."
+}

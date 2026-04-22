@@ -1,0 +1,59 @@
+{
+  "summary": "Phase 2 batch 3 (Team seats + Invites + RBAC + IMAP sync) tested end-to-end. Backend: 27/29 pytest pass in test_phase2_batch3.py — 2 legitimate backend bugs uncovered (audit-attribution filter bug + IMAP sync 400 fallback bug). Frontend: all Team & Access + Accept Invite + Email Sync flows green — owner creates invite → gets /invite/<token> link → anonymous visitor accepts → logs in as rep → sees Team page with invite-btn hidden and 'cannot invite or remove' banner. Data-scoping & RBAC working: rep-user inherits owner's companies/contacts/deals via current_user id→team_owner_id remap; rep is 403'd on /team/invites POST and /team/members PATCH; owner succeeds on PATCH. /api/auth/me returns role='owner', id==team_owner_id==actor_id for seed. Public /api/auth/invite/{token} returns metadata WITHOUT echoing token back (verified). Reusing an accepted token returns 404. IMAP config CRUD works; password obfuscated to '••••••' on GET; sync with no config returns 400; sync with unreachable host returns 502.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/audit",
+        "issue": "Filter uses {actor_id: u['id']} — but current_user remaps u['id'] to team_owner_id. So when a rep creates/updates/deletes anything, the audit entry is written with actor_id=rep.real_user_id, but neither the rep nor the owner can surface it via /api/audit (rep's filter becomes team_owner_id, owner's filter also owner_id). Team-member audit entries are effectively write-only. Test proof: rep creates company X → audit row inserted with actor_id=rep_uid, but both GET /api/audit responses show 0 entries for that row. Fix: server.py line 1346 change to {$or:[{actor_id: u['actor_id']}, {actor_id: {$in: <team member ids>}}]} or at minimum {actor_id: u['actor_id']} so each member sees their own trail.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "POST /api/email/imap/sync",
+        "issue": "Spec says 'sync without password returns 400'. Implementation does `pw = body.get('password') or cfg.get('password')`, and the stored cfg.password is the REAL plaintext password (not obfuscated in DB — only obfuscated on GET response). So when body omits password, backend falls back to the saved plaintext password and proceeds to connect, returning 502 (or worse, succeeding against real IMAP). This both (a) violates the spec 400 contract and (b) is a security issue: storing IMAP passwords in plaintext in Mongo. Fix: either require body.password unconditionally (`if not body.get('password'): raise 400`), or encrypt cfg.password at rest.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {"endpoint": "GET /api/team/invites", "issue": "Returns the invite.token in the plain list response — any authed team member (rep/va/view) who has already joined can still see pending invite tokens for other pending invitees. Consider stripping token from this list and requiring /team/invites/{id}/token for a fresh retrieval, or scoping list to owner/admin only."},
+      {"endpoint": "POST /api/team/invites", "issue": "Response payload also includes the token — fine because only owner/admin can call this — but the returned doc has no `_id` removal explicit; works because the in-memory dict is built manually but Mongo inserted a separate copy. Low risk, just noting."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/team INVITES card", "issues": ["Accepted invites remain in the Invites list forever with no way to clear them (only pending invites have a revoke button). As the team grows, the list becomes cluttered with stale 'accepted' rows. Consider auto-hiding accepted>30d or adding a filter toggle."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_batch3.py",
+    "/app/test_reports/pytest/batch3_results.xml"
+  ],
+  "action_items": [
+    "FIX: server.py list_audit filter — change {actor_id: u['id']} to {actor_id: u['actor_id']} (or team-scoped $or). Currently rep-user audit entries are invisible to everyone.",
+    "FIX: server.py imap_sync — require body.password unconditionally OR stop storing the plaintext password in cfg (at-rest plaintext of IMAP creds is a security bug); spec expects 400 when password omitted.",
+    "OPTIONAL: strip invite.token from GET /api/team/invites response (or restrict endpoint to owner/admin).",
+    "OPTIONAL: hide stale 'accepted' invites in the Team UI list (or auto-expire)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2403 lines — up from 2066 last iter. Split into routers/team.py, routers/imap.py, routers/audit.py urgently.",
+    "`doc = p.model_dump()` for ImapConfigIn stores the plaintext password in Mongo, and get_imap_config only masks it in the response. Either encrypt-at-rest (Fernet) or store-only-on-sync.",
+    "accept_invite does not verify inv.email is not already a registered user until line 2208 — but create_invite at line 2151 has the same check. De-duplicate via a shared helper.",
+    "peek_invite does not rate-limit — a token brute-force (26-byte urlsafe == 2^208 keyspace is fine, but a retry loop with common prefixes should be protected by a per-IP 404 rate limit).",
+    "/api/team/members still returns password_hash stripped via projection {0:password_hash} ✓ — good, but the global {_id:0,password_hash:0} projection is duplicated across 6+ queries; extract a USER_PUBLIC_PROJECTION constant.",
+    "_fetch_imap_messages is pure-sync and called via asyncio.to_thread (good), but there is no timeout on M.login / M.search. A slow/hung IMAP server will tie up a worker thread indefinitely. Use socket.setdefaulttimeout() or imaplib.IMAP4 with a connect-timeout wrapper."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_batch3.py (new — 29 test cases covering auth.me shape, invite create/peek/accept/reuse/revoke, data scoping across /companies/contacts/deals, RBAC 403s for rep, owner PATCH, team members list, audit attribution, IMAP config CRUD, IMAP sync error paths, regression for forms-delete/scheduler/tasks)"
+  ],
+  "success_rate": {
+    "backend": "93.1% (27 pass / 2 fail — both exposing legitimate backend bugs, not test artifacts)",
+    "frontend": "100% on tested flows: nav-team render, invite-btn→modal→invite-create→token link, anonymous /invite/:token accept page, accept-submit logs rep in, rep /team view shows read-only banner + hides invite-btn, /email-sync renders imap-form with SSL toggle + app-password warning"
+  },
+  "test_credentials": "demo@climbleadershiplab.com / SherpaDemo2026! (seeded owner)",
+  "seed_data_creation": "Created TEST_rep_*@example.com invites (several accepted, a couple pending revoked) and 1 UI-created rep user (ui_rep_*@example.com). Owner PATCH-tested rep→admin then reverted to rep. Test IMAP config saved then deleted. The rep_context fixture cleans up its rep user via DELETE /api/team/members/{uid}. A few leftover accepted invites (status='accepted') remain in the Invites list — harmless but visible in the UI.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-4 key findings: (1) Team/Invite/RBAC/DataScoping fully functional. (2) Two real backend bugs to fix: audit filter uses wrong id (u.id vs u.actor_id) + IMAP sync password-fallback bypasses 400 contract and stores plaintext pw at rest. (3) When you re-test after fixes: the audit-attribution test asserts either rep or owner can see rep-authored entries via /api/audit. The IMAP 400 test expects 400 when body omits password even if cfg has a saved pw. (4) Clean state: DELETE /api/team/members for any leftover TEST_/ui_rep_ users; accepted-invite rows cannot be deleted today (no endpoint). (5) Frontend route table: /team, /email-sync (authed), /invite/:token (PUBLIC). data-testids: nav-team, nav-email-sync, invite-btn, invite-email, invite-role, invite-create, invite-result, accept-invite, accept-name, accept-password, accept-submit, imap-form, imap-host, imap-username, imap-password, imap-save, imap-sync, imap-result.",
+  "rca_of_the_issue": "BUG A (audit attribution): Root cause = current_user() remaps user['id'] to team_owner_id so every existing endpoint can keep its {owner_id: u['id']} filter unchanged. list_audit was copied from the same pattern but it's filtering the audit collection's actor_id field — which was correctly changed elsewhere to use u['actor_id']. The filter in list_audit was missed in the refactor. Repro: login as rep → POST /companies → GET /api/audit → expect entry, got []. Fix: `await db.audit_entries.find({'actor_id': u['actor_id']}, ...)`. BUG B (IMAP 400 bypass): Root cause = well-intentioned 'remember password for convenience' fallback. The fallback makes the obfuscation-on-GET check (`pw == '••••••'`) only trigger for users who paste the obfuscated string back — not for users who omit the field. Also, the stored password is plaintext so this 'convenience' is also a data-at-rest security issue. Fix: drop the fallback (`pw = body.get('password')`) and raise 400 if absent. If you want convenience, encrypt cfg.password with a KEK from env."
+}

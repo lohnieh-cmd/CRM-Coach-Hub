@@ -27,7 +27,7 @@ from pathlib import Path
 import docx  # python-docx (already installed because server uses it)
 
 BASE_URL = os.environ.get(
-    "REACT_APP_BACKEND_URL", "https://ascent-windows.preview.emergentagent.com"
+    "REACT_APP_BACKEND_URL", "https://sa-coaching-crm.preview.emergentagent.com"
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 

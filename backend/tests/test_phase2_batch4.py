@@ -19,7 +19,7 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get(
-    "REACT_APP_BACKEND_URL", "https://ascent-windows.preview.emergentagent.com"
+    "REACT_APP_BACKEND_URL", "https://sa-coaching-crm.preview.emergentagent.com"
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 
@@ -98,7 +98,7 @@ class TestPaypalCheckout:
         r = requests.post(f"{API}/payments/paypal/checkout",
                           headers=_hdr(owner_token),
                           json={"invoice_id": an_invoice["id"],
-                                "origin_url": "https://ascent-windows.preview.emergentagent.com"})
+                                "origin_url": "https://sa-coaching-crm.preview.emergentagent.com"})
         if r.status_code == 502:
             pytest.skip(f"PayPal sandbox upstream error: {r.text[:200]}")
         assert r.status_code == 200, r.text

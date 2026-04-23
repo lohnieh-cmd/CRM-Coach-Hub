@@ -1,317 +1,340 @@
-# Deployment Guide — Ascent CRM on Vercel
+# Deployment Guide — Ascent CRM to Production
 
-**Goal:** Deploy the full-stack Ascent CRM app (React frontend + FastAPI backend + MongoDB) to production using Vercel + free-tier hosting partners.
+**Last updated:** Apr 2026
+**Audience:** Anyone wanting to deploy their Ascent CRM fork to the public internet.
 
 ---
 
-## ⚠️ READ FIRST — Important Architecture Note
+## ⚠️ READ FIRST — the Supabase question
 
-**Vercel is optimised for frontend + serverless functions.** Our backend is a **stateful FastAPI app** that uses:
-- A persistent filesystem (`/app/backend/uploads/` for PDF/Word attachments)
-- A long-running asyncio background scheduler (subscription ticker, 5-min tick)
-- Long-lived MongoDB connections (Motor async driver)
+> **"Can I use Supabase as the database?"**
+> **Short answer: not directly, because our backend is wired to MongoDB (via Motor) — Supabase is a PostgreSQL platform.**
 
-These **do not work well on Vercel's serverless runtime** (no persistent disk, 10–60 s cold-start timeouts, no background workers).
+This app was built from day one on **MongoDB** for:
+- 60+ collections (contacts, companies, deals, quotes, invoices, attachments, journals, accounts, periods, employees, emp201_postings, bank_accounts, bank_transactions, fixed_assets, receipts, irp6_workpapers, dividend_declarations, …)
+- Dynamic nested documents (journal lines, deal custom fields, form steps+branches, brand voice JSON, AFS signature metadata)
+- Indexes chosen for Mongo's query planner
 
-### Recommended deployment topology
+**Your three honest options:**
 
-| Component | Recommended Host | Why |
+| Option | Effort | When to use |
 |---|---|---|
-| **Frontend (React)** | **Vercel** | Perfect fit — static build, global CDN, free tier generous. |
-| **Backend (FastAPI)** | **Render.com** (free tier) or **Railway.app** or **Fly.io** | Persistent disk + background workers supported. |
-| **MongoDB** | **MongoDB Atlas** (free M0 tier, 512 MB) | Managed, reliable, global. |
+| **A. MongoDB Atlas (recommended)** — use the free M0 tier | ≈ 0 | 99 % of cases. Keep the existing architecture. |
+| **B. Use Supabase for Auth / Storage / Realtime only** (keep Mongo for data) | Low | You want Supabase's features (social login, object storage, realtime) _alongside_ Mongo. |
+| **C. Rewrite the backend to Postgres (Supabase)** | **High — multi-week job** | You have a hard Postgres mandate. Would require: rewriting every Motor query to `asyncpg` / SQLAlchemy, converting every Pydantic model to a SQL table, migrating all nested documents into relational tables + JSONB columns, rewriting the double-entry accounting engine queries, updating ~244 tests. Not covered in this guide. |
 
-We'll cover the recommended topology below. A pure-Vercel "all-in-one" alternative is documented at the bottom with its caveats.
+**If you still want Option C**, tell me in a separate chat — I can scope out a phased rewrite plan, but expect ~2–3 full sessions of work.
+
+This guide covers **Option A** (recommended) plus a bonus path for **Option B** at the end.
 
 ---
 
-## Prerequisites
+## Recommended topology
+
+| Layer | Host | Free tier? | Notes |
+|---|---|---|---|
+| **Frontend (React)** | **Vercel** | ✅ Free (Hobby plan) | Perfect fit — static build, global CDN, generous free tier. |
+| **Backend (FastAPI + asyncio scheduler + disk)** | **Render.com** / **Railway** / **Fly.io** | Partial (see §5 below) | Needs persistent disk + background worker — Vercel serverless won't work. |
+| **Database (MongoDB)** | **MongoDB Atlas** (free M0) | ✅ 512 MB forever | Perfectly sized for small SMBs. |
+| **LLM** | **Emergent LLM key** | Pay-as-you-go | Already set in your `.env`. |
+| **Object storage (attachments, AFS signatures, receipts)** | Render/Railway **persistent disk** (or S3/Cloudflare R2 / Supabase Storage for Option B) | Depends on host | On Render free tier, disk is ephemeral — see §6 for the three storage options. |
+
+---
+
+## Backend hosting — full comparison
+
+Here's the real pricing landscape for FastAPI backends in **Feb 2026**:
+
+| Host | Free tier | Paid tier (smallest) | Persistent disk on free | Background workers | Best for |
+|---|---|---|---|---|---|
+| **Render.com** | ✅ Yes — 750 hrs/mo web service, spins down after 15 min inactivity (~50 s cold start) | $7/mo "Starter" = always-on, 512 MB RAM | ❌ No (paid only; $0.25/GB-mo from Starter) | ✅ separate worker service | Best free option for testing; cheapest upgrade path |
+| **Railway** | ❌ No (trial credit only; $5 one-time) | $5/mo + metered usage | N/A (paid from day 1) | ✅ | Simpler deploy UX; now paid-only |
+| **Fly.io** | ✅ Yes — 3 small VMs (256 MB RAM each), 3 GB persistent volume free | $1.94/mo per shared-1×-256 VM | ✅ on free | ✅ | Best if you need persistent disk on free |
+| **Koyeb** | ✅ Yes — 1 web service, always-on, 512 MB RAM | $2.7/mo | ✅ | ✅ | Good free alternative to Render |
+| **Vercel** (serverless Python) | ✅ Yes | From $20/mo Pro | ❌ ephemeral /tmp only | ❌ no asyncio schedulers | **NOT recommended for our backend** (no disk, no worker, cold starts kill the ticker) |
+| **AWS App Runner / ECS** | ❌ No true free | From ~$10/mo | ✅ via EFS | ✅ | Production at scale; steeper learning curve |
+| **DigitalOcean App Platform** | ❌ No true free | $5/mo "Basic" | ✅ via Spaces | ✅ | Simpler AWS-alternative |
+
+### 👉 My recommendation by scenario
+
+| Your situation | Pick |
+|---|---|
+| **"I just want to show this to someone this week, for free"** | **Fly.io** (free + persistent disk + worker) **or** **Render free** (ok with 50 s cold-start) |
+| **"I have real users and need always-on, cheap"** | **Render Starter ($7/mo)** or **Koyeb Starter ($2.7/mo)** |
+| **"We're going to grow and want to scale later"** | **Fly.io** (pay-as-you-go, excellent scaling) or **Render** |
+| **"I want one-click git-push deploys"** | **Render** (literally connect GitHub → deploy) or **Railway** |
+
+**No, the backend is not free-forever like Vercel is for static frontends** — because FastAPI is a long-running process that needs RAM + disk + network time. The closest thing to "free forever" for us is **Fly.io** (3 tiny VMs free) or **Koyeb** (1 always-on service free) or **Render free** (with the cold-start trade-off).
+
+---
+
+## Step 1 — Prerequisites
 
 Before starting you need:
-1. A [GitHub](https://github.com/) account (free).
-2. A [Vercel](https://vercel.com/) account (sign up with GitHub).
-3. A [MongoDB Atlas](https://www.mongodb.com/atlas) account (free).
-4. A [Render.com](https://render.com/) account (free) **OR** Railway / Fly.io.
-5. Your codebase pushed to a GitHub repo (use Emergent's "Save to GitHub" button in chat).
+1. A **GitHub** account (free) — sign up at [github.com](https://github.com).
+2. A **Vercel** account (free) — sign up at [vercel.com](https://vercel.com) with GitHub.
+3. A **MongoDB Atlas** account (free) — [cloud.mongodb.com](https://cloud.mongodb.com).
+4. A **Render / Fly.io / Koyeb** account (pick one from §Recommendation above).
+5. Your codebase pushed to GitHub (use Emergent's **"Save to GitHub"** button in the chat input).
 6. These credentials ready:
-   - `EMERGENT_LLM_KEY` (from your Emergent profile)
-   - `STRIPE_API_KEY` (from [dashboard.stripe.com](https://dashboard.stripe.com/apikeys))
-   - `PAYPAL_CLIENT_ID` + `PAYPAL_SECRET` (from [developer.paypal.com](https://developer.paypal.com/dashboard/))
-   - A strong random string for `JWT_SECRET` (generate one: `openssl rand -hex 32`)
+   - `EMERGENT_LLM_KEY` — already in `/app/backend/.env` from your Emergent workspace.
+   - `STRIPE_API_KEY` — from [dashboard.stripe.com/apikeys](https://dashboard.stripe.com/apikeys) (test or live).
+   - `PAYPAL_CLIENT_ID` + `PAYPAL_SECRET` — from [developer.paypal.com/dashboard](https://developer.paypal.com/dashboard/) (Sandbox or Live).
+   - A strong random `JWT_SECRET` — generate one: `openssl rand -hex 32`.
 
 ---
 
-## Step 1 — Push your code to GitHub
+## Step 2 — Push code to GitHub
 
 1. In the Emergent chat input, click the **"Save to GitHub"** button.
-2. Confirm the repo name (e.g. `lohnieh-cmd/CRM-Coach-Hub`).
-3. Wait for the push to complete.
-4. Verify at `https://github.com/<you>/<repo>` — you should see `backend/`, `frontend/`, `README.md`, `USER_MANUAL.md`, and this file.
+2. Confirm repo name (e.g. `lohnieh-cmd/CRM-Coach-Hub`).
+3. Wait for push. Verify at `https://github.com/<you>/<repo>`.
 
 ---
 
-## Step 2 — Set up MongoDB Atlas (database)
+## Step 3 — Set up MongoDB Atlas
 
-1. Go to [https://cloud.mongodb.com](https://cloud.mongodb.com) → sign up.
-2. Click **"Build a Database"** → choose **M0 Free**.
-3. Pick a region close to your users (e.g. **AWS eu-west-1** for Europe/Africa).
-4. Name the cluster `ascent-crm-prod`.
-5. Click **Create**.
-6. In the "Security Quickstart" panel:
-   - **Username:** `ascentadmin`
-   - **Password:** click *Autogenerate* → **copy and save this password**.
-   - **Access:** click *"Add My Current IP Address"* AND also add `0.0.0.0/0` (allow from anywhere — required because Render/Vercel have dynamic IPs).
-7. Click **Finish & Close**.
-8. On the cluster page → click **Connect** → **Drivers** → copy the connection string, which looks like:
+1. [cloud.mongodb.com](https://cloud.mongodb.com) → sign up.
+2. **Build a Database** → **M0 Free**.
+3. Region: pick the one closest to your users (e.g. **AWS eu-west-1** for Europe / South Africa).
+4. Cluster name: `ascent-crm-prod`.
+5. In Security Quickstart:
+   - Create a DB user (username: `ascent_prod`, strong password — save it).
+   - Network Access: add `0.0.0.0/0` (or your backend host's static IP for tighter security).
+6. Click **Connect** → **Drivers** → Python → **3.12 or later** → **copy the connection string**. It looks like:
    ```
-   mongodb+srv://ascentadmin:<password>@ascent-crm-prod.xxxxx.mongodb.net/?retryWrites=true&w=majority
+   mongodb+srv://ascent_prod:<password>@ascent-crm-prod.xxxxx.mongodb.net/?retryWrites=true&w=majority
    ```
-9. Replace `<password>` with the password you saved. Save the full string as `MONGO_URL` — you'll paste it into Render in Step 3.
+7. Paste your real password into the `<password>` placeholder.
+
+Keep this string — you'll paste it into the backend host's env vars in Step 4.
 
 ---
 
-## Step 3 — Deploy the backend to Render.com
+## Step 4 — Deploy the backend (pick ONE host)
 
-1. Go to [https://render.com](https://render.com) → sign up with GitHub.
-2. Click **New +** → **Web Service** → connect your GitHub repo.
-3. Configure the service:
+### Option 4A — Render.com (easiest; free with cold starts)
+
+1. [render.com](https://render.com) → sign up with GitHub.
+2. **New → Web Service** → connect your GitHub repo → pick the repo.
+3. Configure:
    - **Name:** `ascent-crm-backend`
-   - **Region:** same region as MongoDB Atlas
+   - **Region:** Frankfurt (closest to SA users)
    - **Branch:** `main`
    - **Root Directory:** `backend`
    - **Runtime:** `Python 3`
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
-   - **Instance Type:** `Free`
-4. Scroll to **Environment Variables** → click **Add Environment Variable** for each:
+   - **Instance Type:** Free (for testing) or Starter ($7/mo for always-on).
+4. **Environment** tab → add these variables:
+   ```
+   MONGO_URL=mongodb+srv://ascent_prod:<password>@ascent-crm-prod.xxxxx.mongodb.net/?retryWrites=true&w=majority
+   DB_NAME=ascent_crm
+   JWT_SECRET=<openssl rand -hex 32 output>
+   EMERGENT_LLM_KEY=<from your backend/.env>
+   STRIPE_API_KEY=sk_test_...
+   PAYPAL_CLIENT_ID=<from PayPal developer dashboard>
+   PAYPAL_SECRET=<from PayPal developer dashboard>
+   PAYPAL_MODE=sandbox
+   PUBLIC_SITE_BASE=https://<your-vercel-domain>.vercel.app
+   UPLOAD_ROOT=/app/uploads
+   ```
+5. **Disk** (paid plans only): add a disk mounted at `/app/uploads`, size 1 GB.
+   - On **free tier** disk is ephemeral — attachments/signatures will disappear on re-deploy. **For production you MUST use Starter ($7/mo) + disk**, or switch attachment storage to S3/R2/Supabase Storage (see §6).
+6. **Create Web Service**. First build takes ~5 min. You'll get a URL like `https://ascent-crm-backend.onrender.com`.
+7. Verify: `curl https://ascent-crm-backend.onrender.com/api/` — should return the service banner.
 
-   | Key | Value |
-   |---|---|
-   | `MONGO_URL` | (the Atlas connection string from Step 2) |
-   | `DB_NAME` | `ascent_crm_prod` |
-   | `JWT_SECRET` | (generate: `openssl rand -hex 32`) |
-   | `EMERGENT_LLM_KEY` | (from your Emergent profile) |
-   | `STRIPE_API_KEY` | `sk_test_...` or `sk_live_...` |
-   | `PAYPAL_CLIENT_ID` | (from PayPal Developer) |
-   | `PAYPAL_SECRET` | (from PayPal Developer) |
-   | `PAYPAL_MODE` | `sandbox` or `live` |
-   | `CORS_ORIGINS` | `https://<your-vercel-project>.vercel.app` (you'll know this URL after Step 4 — come back and update) |
+### Option 4B — Fly.io (free + persistent disk)
 
-5. Click **Create Web Service** → wait ~5 min for first build.
-6. Once deployed, copy the URL (e.g. `https://ascent-crm-backend.onrender.com`) — you'll need it in Step 4.
-7. Test it: open `https://ascent-crm-backend.onrender.com/api/health` — should return `{"status":"ok"}`.
+1. Install flyctl: `curl -L https://fly.io/install.sh | sh`.
+2. `fly auth signup`.
+3. In `/app/backend/`:
+   ```bash
+   fly launch --name ascent-crm-backend --region fra --no-deploy
+   ```
+4. Edit the generated `fly.toml` — add a mount + release-command for health:
+   ```toml
+   [mounts]
+     source = "ascent_data"
+     destination = "/app/uploads"
 
-> **Free-tier note:** Render free-tier services **sleep after 15 min of inactivity** and take ~30 s to wake up on the next request. Upgrade to the $7/mo Starter plan to keep the backend warm.
+   [env]
+     DB_NAME = "ascent_crm"
+     PAYPAL_MODE = "sandbox"
+     UPLOAD_ROOT = "/app/uploads"
+   ```
+5. Create the volume: `fly volumes create ascent_data --region fra --size 1`.
+6. Set secrets (env vars):
+   ```bash
+   fly secrets set MONGO_URL="mongodb+srv://..."
+   fly secrets set JWT_SECRET="$(openssl rand -hex 32)"
+   fly secrets set EMERGENT_LLM_KEY="..."
+   fly secrets set STRIPE_API_KEY="..."
+   fly secrets set PAYPAL_CLIENT_ID="..."
+   fly secrets set PAYPAL_SECRET="..."
+   fly secrets set PUBLIC_SITE_BASE="https://<your-vercel-domain>.vercel.app"
+   ```
+7. Deploy: `fly deploy`.
+8. URL: `https://ascent-crm-backend.fly.dev`.
 
-### Alternative — Railway.app
-If you prefer Railway:
-1. [railway.app](https://railway.app) → New Project → Deploy from GitHub.
-2. Set root to `backend/`, same env vars as above.
-3. Railway auto-detects the start command from the `Procfile` (create one if missing — see Appendix A).
+### Option 4C — Koyeb (another free always-on option)
+
+Similar to Render. Connect GitHub → pick `backend/` root → Python runtime → same start command + env vars → deploy.
 
 ---
 
-## Step 4 — Deploy the frontend to Vercel
+## Step 5 — Deploy the frontend on Vercel
 
-1. Go to [https://vercel.com](https://vercel.com) → sign in with GitHub.
-2. Click **Add New...** → **Project** → import your GitHub repo.
+1. [vercel.com](https://vercel.com) → sign in with GitHub.
+2. **Add New** → **Project** → pick your repo.
 3. Configure:
-   - **Framework Preset:** `Create React App`
-   - **Root Directory:** `frontend`
-   - **Build Command:** `yarn build` (default)
-   - **Output Directory:** `build` (default)
-   - **Install Command:** `yarn install` (default)
-4. Expand **Environment Variables** and add:
-
-   | Key | Value |
-   |---|---|
-   | `REACT_APP_BACKEND_URL` | `https://ascent-crm-backend.onrender.com` *(your Render URL from Step 3 — no trailing slash)* |
-
-5. Click **Deploy**.
-6. Wait ~2 min → you'll get a URL like `https://crm-coach-hub-xyz.vercel.app`.
-7. Open the URL → you should see the login page.
-
----
-
-## Step 5 — Update CORS on the backend
-
-1. Go back to your Render service → **Environment** tab.
-2. Update `CORS_ORIGINS` to your Vercel URL, e.g.:
+   - **Framework Preset:** `Create React App` (CRA).
+   - **Root Directory:** `frontend`.
+   - **Build Command:** `yarn build` (CRA's default is `react-scripts build` — either works).
+   - **Output Directory:** `build`.
+4. **Environment Variables** (add one):
    ```
-   https://crm-coach-hub-xyz.vercel.app,https://your-custom-domain.com
+   REACT_APP_BACKEND_URL=https://<your-backend-domain>   (e.g. https://ascent-crm-backend.onrender.com)
    ```
-3. Click **Save Changes** → Render auto-redeploys.
+   ⚠️ **No trailing slash.** The frontend appends `/api/...` to this.
+5. Click **Deploy**. ~2 min later you'll get `https://<your-project>.vercel.app`.
+6. Open the URL → should show the login page with "Midnight Mountain" branding.
+
+### Update backend CORS + PUBLIC_SITE_BASE
+
+Once you have the final Vercel domain:
+1. Go back to your backend host (Render / Fly / Koyeb) → env vars → set:
+   ```
+   PUBLIC_SITE_BASE=https://<your-project>.vercel.app
+   ```
+2. Redeploy / restart backend.
+3. CORS is already wildcard in `server.py` for dev, but for production you can tighten:
+   ```python
+   # In server.py — optional production hardening
+   CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
+   ```
+   Then set `CORS_ORIGINS=https://<your-project>.vercel.app` on the backend.
 
 ---
 
-## Step 6 — Configure a custom domain (optional)
+## Step 6 — Attachment & signature storage
 
-### On Vercel (frontend)
-1. Vercel project → **Settings** → **Domains** → Add `app.yourdomain.com`.
-2. Vercel shows a CNAME record → add it at your DNS provider.
+The backend writes uploaded files (quote/invoice attachments, AFS signature PNG, receipt OCR images) to disk at `UPLOAD_ROOT`.
 
-### On Render (backend)
-1. Render service → **Settings** → **Custom Domain** → Add `api.yourdomain.com`.
-2. Render shows a CNAME record → add it at your DNS provider.
-3. Update your Vercel `REACT_APP_BACKEND_URL` to `https://api.yourdomain.com`.
-4. Update Render `CORS_ORIGINS` to `https://app.yourdomain.com`.
+Pick one strategy:
+
+| Strategy | How | Cost | When to use |
+|---|---|---|---|
+| **Persistent disk on host** (easiest — no code change) | Render Starter + disk, Fly.io volume, DO Block Storage | $1–3/mo for 1 GB | If you're already on a paid tier of the host |
+| **AWS S3 / Cloudflare R2** | Swap `disk_path.write_bytes(data)` for an S3 put; return signed URLs on download | R2 = 10 GB free forever | Growing user base; need CDN for attachments |
+| **Supabase Storage** (Option B from §1) | Same as S3 but using Supabase JS SDK; very generous free tier (1 GB storage, 2 GB egress/mo) | Free up to quota | If you want to use Supabase _selectively_ without rewriting the database layer |
+
+**If you want Supabase Storage (Option B)** — I can wire this up in ~30 min in a follow-up session: it's a drop-in replacement for the 3 write-to-disk spots (`_upload_attachment_impl`, `upload_afs_signature`, receipt ingest) + swapping 3 download routes to signed Supabase URLs. Ask and I'll do it.
 
 ---
 
-## Step 7 — Configure Stripe + PayPal webhooks (production)
+## Step 7 — Stripe & PayPal webhooks
+
+Both payment providers need to know _your deployed backend URL_ for their webhooks.
 
 ### Stripe
-1. [dashboard.stripe.com](https://dashboard.stripe.com) → **Developers** → **Webhooks** → **Add endpoint**.
-2. URL: `https://api.yourdomain.com/api/webhook/stripe`
-3. Events: `checkout.session.completed`, `invoice.paid`, `customer.subscription.updated`.
-4. Copy the signing secret → add as `STRIPE_WEBHOOK_SECRET` env var on Render → redeploy.
+1. [dashboard.stripe.com/webhooks](https://dashboard.stripe.com/webhooks) → **Add endpoint**.
+2. URL: `https://<your-backend-domain>/api/webhook/stripe`.
+3. Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`.
+4. Copy the **Signing secret** (starts `whsec_...`).
+5. Backend env → add: `STRIPE_WEBHOOK_SECRET=whsec_...`.
+6. Redeploy backend.
 
 ### PayPal
-1. [developer.paypal.com](https://developer.paypal.com) → My Apps & Credentials → your app → **Webhooks** → **Add Webhook**.
-2. URL: `https://api.yourdomain.com/api/webhook/paypal`
-3. Events: `PAYMENT.CAPTURE.COMPLETED`.
-4. Copy the Webhook ID → add as `PAYPAL_WEBHOOK_ID` env var on Render → redeploy.
+1. [developer.paypal.com/dashboard](https://developer.paypal.com/dashboard/) → your app → **Webhooks**.
+2. URL: `https://<your-backend-domain>/api/webhook/paypal`.
+3. Event: `PAYMENT.CAPTURE.COMPLETED` (or **All events** during testing).
+4. Copy the **Webhook ID** (e.g. `3NC11658CK228473R`).
+5. Backend env → add: `PAYPAL_WEBHOOK_ID=<id>`.
+6. Redeploy.
+
+**For production, flip `PAYPAL_MODE=live`** and use your live `PAYPAL_CLIENT_ID` / `PAYPAL_SECRET` instead of sandbox.
 
 ---
 
-## Step 8 — First-run bootstrap
+## Step 8 — Seed the database
 
-1. Open your production frontend URL.
-2. Log in with the seeded demo account **OR** register a new owner (the first user becomes the owner).
-3. Navigate to `/accounting` → click **"Seed Chart of Accounts"** once.
-4. Go to `/team` → invite your teammates.
-5. Connect any remaining integrations (IMAP, PayPal live, Stripe live).
+First-time login after deploy will NOT have the SA Chart of Accounts or demo data seeded. Two options:
 
----
+### Option 1 — Just sign up
+Hit `/login` → **Create account** — the first user becomes owner. Then on `/accounting` → Overview → **"Seed Chart of Accounts"**. Done.
 
-## Step 9 — Automatic redeploys
-
-Every `git push` to `main`:
-- **Vercel** rebuilds the frontend automatically (~2 min).
-- **Render** rebuilds the backend automatically (~5 min).
-
-To preview a branch:
-- Vercel creates a unique preview URL for every PR / branch automatically.
-
----
-
-## Alternative: Pure-Vercel Deployment (Frontend + Backend)
-
-If you want to host the backend on Vercel too (using Vercel Serverless Functions):
-
-### Caveats
-1. ❌ **Attachments won't work** — no persistent disk. You must migrate uploads to S3 / Vercel Blob / Cloudflare R2.
-2. ❌ **Background scheduler won't work** — no long-running processes. You must use **Vercel Cron Jobs** or an external service (e.g. cron-job.org, GitHub Actions) to ping a `/api/scheduler/tick` endpoint every 5 min.
-3. ⚠️ **Cold starts** — FastAPI via Mangum adapter has ~2–5 s cold-start.
-4. ⚠️ **10–60 s function timeout** — long AI generations may time out.
-
-### Steps (high level)
-1. Add `/app/backend/vercel.json`:
-   ```json
-   {
-     "version": 2,
-     "builds": [
-       { "src": "server.py", "use": "@vercel/python" }
-     ],
-     "routes": [
-       { "src": "/(.*)", "dest": "server.py" }
-     ]
-   }
-   ```
-2. Wrap FastAPI with Mangum in `server.py`:
-   ```python
-   from mangum import Mangum
-   handler = Mangum(app)
-   ```
-3. Add `mangum` to `requirements.txt`.
-4. Create a **second** Vercel project pointing at `backend/` root.
-5. Migrate `/app/backend/uploads/` to Vercel Blob:
-   - `yarn add @vercel/blob`
-   - Rewrite `POST /api/{resource}/{rid}/attachments` to upload to Blob and store the Blob URL instead of a disk path.
-6. Replace the asyncio scheduler with a **Vercel Cron Job**:
-   ```json
-   // vercel.json
-   "crons": [
-     { "path": "/api/scheduler/tick", "schedule": "*/5 * * * *" }
-   ]
-   ```
-7. Migrate IMAP sync to a cron-triggered endpoint too.
-
-**We do not recommend this** unless you're committed to a fully serverless architecture. Render + Vercel is simpler and costs the same ($0 on free tiers).
-
----
-
-## Appendix A — Render Procfile (optional)
-
-Create `/app/backend/Procfile`:
+### Option 2 — Replicate the demo seed
+SSH into your backend container / Fly shell and run:
+```bash
+cd backend
+python -c "from server import seed_data; import asyncio; asyncio.run(seed_data())"
 ```
-web: uvicorn server:app --host 0.0.0.0 --port $PORT
-```
-
-## Appendix B — Environment Variables Reference
-
-### Backend (Render)
-| Variable | Required | Example |
-|---|---|---|
-| `MONGO_URL` | ✅ | `mongodb+srv://...` |
-| `DB_NAME` | ✅ | `ascent_crm_prod` |
-| `JWT_SECRET` | ✅ | (64-char random hex) |
-| `EMERGENT_LLM_KEY` | ✅ | `sk-emergent-...` |
-| `STRIPE_API_KEY` | ✅ | `sk_test_...` |
-| `STRIPE_WEBHOOK_SECRET` | production | `whsec_...` |
-| `PAYPAL_CLIENT_ID` | ✅ | `AYH...` |
-| `PAYPAL_SECRET` | ✅ | `EHG...` |
-| `PAYPAL_MODE` | ✅ | `sandbox` or `live` |
-| `PAYPAL_WEBHOOK_ID` | production | `3SW...` |
-| `CORS_ORIGINS` | ✅ | `https://app.yourdomain.com` |
-
-### Frontend (Vercel)
-| Variable | Required | Example |
-|---|---|---|
-| `REACT_APP_BACKEND_URL` | ✅ | `https://api.yourdomain.com` |
+(This is what runs automatically on first local boot; on hosted environments it's gated behind `SEED_DEMO_DATA=true` — add that env var if you want demo contacts/deals pre-populated.)
 
 ---
 
-## Appendix C — Troubleshooting deployment
+## Step 9 — Post-deploy verification checklist
 
-| Symptom | Fix |
+Run through this once after your first successful deploy:
+
+| Check | How |
 |---|---|
-| Frontend loads but login fails with CORS error | Update Render `CORS_ORIGINS` to include your Vercel URL → redeploy. |
-| 502 on Render backend | Check Render logs → MongoDB connection usually the culprit. Verify `MONGO_URL` + Atlas IP allow-list (`0.0.0.0/0`). |
-| Attachments upload fails on Render free tier | Render free tier has ephemeral disk; files are lost on restart. Upgrade plan or migrate to S3 / Vercel Blob. |
-| Background scheduler not ticking | Free-tier services sleep. Upgrade or trigger via external cron → `POST /api/scheduler/tick`. |
-| Vercel build fails "Module not found" | Ensure the **Root Directory** is `frontend` in Vercel project settings. |
-| Vercel build fails on `craco` | Vercel auto-detects CRA; make sure `package.json` has `"scripts": {"build": "craco build"}`. |
-| Gemini 3 AI returns 401 | `EMERGENT_LLM_KEY` missing or out of balance — top up at Emergent Profile. |
+| Backend healthy | `curl https://<backend>/api/` → 200 with service banner |
+| Login works | Open `https://<frontend>/login` → create an account or log in |
+| MongoDB writes land | Log in, create a contact, check Atlas → Collections → `contacts` |
+| CORS OK | Open DevTools network tab; no red CORS errors on any `/api/...` call |
+| Stripe payment | Create an invoice → **Pay** → Stripe Checkout → test card `4242 4242 4242 4242` → webhook fires → invoice marks paid |
+| PayPal payment | Same flow, **PayPal** button → sandbox checkout → return URL polls → invoice marks paid |
+| AI Reply | On a contact's timeline → **Draft reply** → Gemini 3 response within ~5 s |
+| AFS PDF | `/accounting` → Periods → **Download PDF** → opens in reader |
+| Attachments persist | Upload a PDF on a quote → trigger a backend redeploy → come back → file still downloadable (this is the key test — if the file is gone, you're on ephemeral disk and need §6) |
 
 ---
 
-## Appendix D — Cost summary
+## Step 10 — Custom domain (optional)
 
-| Service | Tier | Monthly Cost |
+### Frontend
+1. Vercel dashboard → your project → **Domains** → **Add** → type your domain (e.g. `app.coaches.co.za`).
+2. Follow Vercel's DNS instructions (usually add a CNAME to `cname.vercel-dns.com`).
+3. Wait for SSL auto-provisioning (~2 min).
+
+### Backend
+1. Render / Fly / Koyeb all support custom domains on paid plans.
+2. Add a CNAME `api.coaches.co.za` → `<backend>.onrender.com` / `<backend>.fly.dev`.
+3. Re-issue SSL (automatic).
+4. Update Vercel env var `REACT_APP_BACKEND_URL=https://api.coaches.co.za` → re-deploy frontend.
+
+---
+
+## Bonus: Pure-Vercel alternative (not recommended)
+
+You **can** deploy the backend as Vercel Python serverless functions, but:
+- ❌ No persistent disk → all attachment/signature uploads broken unless moved to S3/R2/Supabase Storage.
+- ❌ No long-running asyncio → subscription scheduler **disabled** (invoices won't auto-generate from recurring subscriptions).
+- ❌ 10 s cold-start timeout → AI calls and PDF generation may time out.
+- ❌ Each function invocation gets a fresh Mongo connection → burns through Atlas connection quota fast.
+
+If you still want to try: add `vercel.json` routing all `/api/*` to `backend/vercel_handler.py`, switch storage to an object-store provider, and accept the subscription ticker will be dead. Not a path I'd recommend for this app.
+
+---
+
+## Cost summary — the realistic "tell me what this will cost me" table
+
+| Phase | Setup | Monthly cost |
 |---|---|---|
-| Vercel (frontend) | Hobby (free) | $0 |
-| Render (backend) | Free | $0 (with cold starts) |
-| Render (backend) | Starter | $7 |
-| MongoDB Atlas | M0 Free | $0 |
-| MongoDB Atlas | M2 Shared | $9 |
-| Custom domain (optional) | — | ~$10/year |
-| **Total (free tier)** | | **$0/month** |
-| **Total (recommended prod)** | | **~$16/month** |
+| **Free tier everything** (Render free + Atlas M0 + Vercel Hobby + Fly free disk) | 1 evening | **$0 / mo** (with cold-start caveats) |
+| **Minimum viable production** (Render Starter + Atlas M0 + Vercel Hobby + 1 GB disk) | 1 evening | **~$9 / mo** (Render $7 + disk $1.50 + Vercel free) |
+| **Small SMB (500 invoices/mo, 1 GB attachments)** | Add Atlas M10 for perf | ~$70 / mo |
+| **Growing coaching business (5 000 invoices/mo, daily backups)** | Atlas M20, Render paid + worker service, Cloudflare R2 for files | ~$180 / mo |
 
 ---
 
-## Appendix E — Backup & disaster recovery
-
-1. **MongoDB Atlas** runs automated backups on paid tiers. On M0 free tier, export manually:
-   ```bash
-   mongodump --uri "$MONGO_URL" --out backup-$(date +%F)
-   ```
-2. **Attachments** — if using Render disk, export via SSH periodically. If using Vercel Blob / S3, backups are automatic.
-3. **Code** — GitHub is your source of truth. Tag production releases:
-   ```bash
-   git tag v1.0.0 && git push --tags
-   ```
+## Support & updates
+- Codebase: your GitHub fork.
+- Roadmap: `/app/memory/PRD.md`.
+- Tests: `cd backend && pytest` — 244 pass + 4 skip (Apr 2026).
+- Stuck? Open a GitHub issue with the deploy-step + full error message + host name.
 
 ---
 

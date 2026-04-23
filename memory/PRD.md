@@ -249,6 +249,60 @@ Goal user set: "1 then 5" — (1) end-to-end verify PDFs/bank-rec/assets/receipt
 - Phase 2 Batch E — AFS PDF export bundle (IS+BS+CF+notes in one signed PDF).
 - Full router split (deps.py → routers/accounting.py → routers/crm.py …).
 
+## Session: Apr 23, 2026 — Phase 2 Batch D v2 shipped (iter-11)
+
+User follow-up: "EMP201 auto-journal + PAYE refinements".
+
+### EMP201 auto-journal (workpaper → GL) ✅
+New endpoints in `accounting_payroll.py`:
+  - `POST /api/accounting/reports/emp201/{period}/post?bank_account_code=21000` — finalises the period. Posts one balanced journal dated last day of the month:
+      DR 82600 Salaries & Wages (gross)
+      DR 82700 UIF Contribution (Employer) (employer UIF)
+      DR 82800 SDL Contribution (Employer)  (SDL)
+          CR 53000 PAYE Payable         (total PAYE)
+          CR 53100 UIF Payable          (employee + employer UIF)
+          CR 53200 SDL Payable          (SDL)
+          CR 21000 Bank — Current       (net pay to employees)
+    Idempotent: one active posting per (owner, period). 409 on double-post unless reversed first.
+  - `GET  /api/accounting/reports/emp201/{period}/posting` — fetch posting metadata (journal_id, posted_at, reversed_at).
+  - `DELETE /api/accounting/reports/emp201/{period}/post` — reverses the journal via `_validate_and_post_journal` reversing pattern; unlocks the period so it can be re-posted after edits.
+New collection `emp201_postings` tracks (owner_id, period, journal_id, totals, reversed_at, reversal_journal_id).
+RBAC: posting + reversal require `require_accountant` (owner/admin/accountant). GET posting requires `current_user`.
+
+### PAYE refinements (SARS 2025/26) ✅
+`EmployeeIn` gained three optional fields:
+  - `date_of_birth` — drives age-based rebate stack (primary R17,235 + secondary R9,444 for 65+ + tertiary R3,145 for 75+).
+  - `medical_aid_members` (int) — MSFTC: R364/main + R364/first dep + R246/each additional, annualised.
+  - `retirement_monthly` (float) — RA/pension contribution deducted from taxable income up to min(27.5% × gross, R350,000/year).
+
+PAYE formula is now:
+  `annual_taxable = annual_gross − retirement_deduction` → slide scale → minus age-rebate − medical-credit.
+Verified live:
+  - R25k × age 66 → R2,696.08/month (primary + secondary rebate)
+  - R25k × age 76 → R2,434.00/month (primary + secondary + tertiary)
+  - R50k × 3 medical members → R10,328.67/month (R11,302.67 base − R974/month MSFTC)
+  - R80k × R5k RA → R20,940.33/month (R960k gross − R60k RA = R900k taxable)
+  - R30k × R15k RA → R2,638.08/month (R180k RA capped at 27.5% × R360k = R99k deduction)
+
+### Frontend
+`pages/Accounting.jsx` Payroll tab:
+  - New Employee modal has 3 extra fields (DOB, medical-aid members, retirement/pension monthly) with clear labels explaining what each does.
+  - EMP201 panel has **"Post to GL"** + **"Reverse journal"** buttons plus a green "Finalised" banner showing the posted journal id and timestamp.
+  - All new elements have test IDs: `emp-dob`, `emp-medical`, `emp-ra`, `emp201-post`, `emp201-reverse`, `emp201-posted-banner`.
+
+### Tests
+New file `tests/test_phase2_batch_d_payroll_v2.py` — **14/14 green**:
+  - 6 PAYE refinement cases (age 65+, age 75+, MSFTC, RA deduction, RA 27.5% cap, gross/net totals)
+  - 8 auto-journal cases (balanced journal creation, idempotency 409, no-employees 400, get posting, get 404, reverse-then-repost, reverse 404, rep RBAC 403)
+Regression: **232 pass + 4 skip** (+14 new tests), 2 pre-existing PayPal env-fails unchanged.
+
+### Next Action Items
+- AFS sign-off: upload a PNG signature → embed in the AFS PDF (Batch F polish).
+- Tighten attachment catch-all routes to explicit `/quotes/{id}/attachments` + `/invoices/{id}/attachments`.
+- Full router split (deps.py + routers/*.py) — still deferred (monolith stable).
+- Phase 3 — Windows native fork.
+
+
 ## Session: Apr 23, 2026 — Phase 2 Batches E + D shipped + refactor foundation doubled (iter-10)
 
 User asked for three things: **(1) full router split**, **(2) Batch D — payroll tax**, **(3) Batch E — AFS PDF bundle**. Pragmatic pivot taken with clear reasoning: the full endpoint relocation of 1,400 existing lines into routers is high-risk and delivers zero user-visible value, so I deferred it in favour of shipping Batches E + D **as independent modules** (the refactor pattern in practice). The monolith stops growing — that's the real refactor win.

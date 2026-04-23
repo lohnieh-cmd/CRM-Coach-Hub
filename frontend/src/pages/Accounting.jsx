@@ -1097,7 +1097,11 @@ function PayrollAndTax() {
 function EmployeesRegister() {
   const [rows, setRows] = useState([]);
   const [show, setShow] = useState(false);
-  const [form, setForm] = useState({ name: "", monthly_gross: "", role: "", tax_status: "standard" });
+  const emptyForm = {
+    name: "", monthly_gross: "", role: "", tax_status: "standard",
+    date_of_birth: "", medical_aid_members: 0, retirement_monthly: "",
+  };
+  const [form, setForm] = useState(emptyForm);
 
   const load = async () => {
     const { data } = await api.get("/accounting/employees?active_only=false");
@@ -1110,9 +1114,12 @@ function EmployeesRegister() {
       await api.post("/accounting/employees", {
         ...form,
         monthly_gross: parseFloat(form.monthly_gross || 0),
+        medical_aid_members: parseInt(form.medical_aid_members || 0),
+        retirement_monthly: parseFloat(form.retirement_monthly || 0),
+        date_of_birth: form.date_of_birth || null,
       });
       toast.success("Employee added");
-      setShow(false); setForm({ name: "", monthly_gross: "", role: "", tax_status: "standard" });
+      setShow(false); setForm(emptyForm);
       load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
   };
@@ -1126,7 +1133,7 @@ function EmployeesRegister() {
   return (
     <div>
       <div className="flex justify-between items-center mb-3">
-        <p className="text-sm text-[#94a3b8]">Register of employees used for EMP201 payroll tax computation. Monthly gross is the base before PAYE/UIF deductions.</p>
+        <p className="text-sm text-[#94a3b8]">Register of employees used for EMP201 payroll tax computation. Monthly gross is the base before PAYE/UIF deductions. Optional fields (DOB, medical aid, retirement) refine PAYE per SARS 2025/26.</p>
         <button className="btn btn-primary" onClick={() => setShow(true)} data-testid="emp-new"><Plus size={14}/> New Employee</button>
       </div>
       <div className="card overflow-hidden">
@@ -1162,6 +1169,15 @@ function EmployeesRegister() {
             <option value="non_resident">Non-resident (15% WHT)</option>
           </select>
         </Field>
+        <Field label="Date of birth (for 65+/75+ rebates — optional)">
+          <input type="date" className="input" value={form.date_of_birth} onChange={e => setForm({ ...form, date_of_birth: e.target.value })} data-testid="emp-dob"/>
+        </Field>
+        <Field label="Medical-aid members (0 = none, 1 = main only, 2+ = main + deps)">
+          <input type="number" min="0" className="input" value={form.medical_aid_members} onChange={e => setForm({ ...form, medical_aid_members: e.target.value })} data-testid="emp-medical"/>
+        </Field>
+        <Field label="Retirement / pension contribution per month (ZAR — optional)">
+          <input type="number" className="input" value={form.retirement_monthly} onChange={e => setForm({ ...form, retirement_monthly: e.target.value })} data-testid="emp-ra"/>
+        </Field>
         <div className="flex justify-end gap-2 mt-4">
           <button className="btn btn-secondary" onClick={() => setShow(false)}>Cancel</button>
           <button className="btn btn-primary" onClick={save} data-testid="emp-save">Save</button>
@@ -1175,20 +1191,72 @@ function Emp201Panel() {
   const now = new Date();
   const [period, setPeriod] = useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
   const [data, setData] = useState(null);
+  const [posting, setPosting] = useState(null);   // existing posting record (if any)
+  const [busy, setBusy] = useState(false);
+
   const run = async () => {
-    try { const r = await api.get(`/accounting/reports/emp201?period=${period}`); setData(r.data); }
-    catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+    try {
+      const r = await api.get(`/accounting/reports/emp201?period=${period}`);
+      setData(r.data);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+    // Load posting state for this period (404 = not posted — not an error)
+    try {
+      const p = await api.get(`/accounting/reports/emp201/${period}/posting`);
+      setPosting(p.data);
+    } catch { setPosting(null); }
   };
   useEffect(() => { run(); }, []); // eslint-disable-line
 
+  const postToGl = async () => {
+    if (!window.confirm(`Post EMP201 ${period} to the General Ledger? This creates a journal entry: DR Salaries/SDL/UIF-er, CR PAYE/UIF/SDL/Bank.`)) return;
+    setBusy(true);
+    try {
+      const r = await api.post(`/accounting/reports/emp201/${period}/post`);
+      toast.success(`Posted. Journal ${r.data.journal_id.slice(0, 8)}…`);
+      await run();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+    finally { setBusy(false); }
+  };
+
+  const reverse = async () => {
+    if (!window.confirm(`Reverse the EMP201 ${period} journal? This creates a reversing entry and unlocks the period for re-posting.`)) return;
+    setBusy(true);
+    try {
+      await api.delete(`/accounting/reports/emp201/${period}/post`);
+      toast.success("Reversed");
+      await run();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+    finally { setBusy(false); }
+  };
+
+  const isPosted = posting && !posting.reversed_at;
+
   return (
     <div>
-      <div className="flex items-end gap-3 mb-3">
+      <div className="flex items-end gap-3 mb-3 flex-wrap">
         <Field label="Period (YYYY-MM)">
           <input type="text" className="input" value={period} onChange={e => setPeriod(e.target.value)} placeholder="2026-04" data-testid="emp201-period"/>
         </Field>
         <button className="btn btn-primary" onClick={run} data-testid="emp201-run"><Calculator size={14}/> Run</button>
+        {data && data.employees && data.employees.length > 0 && !isPosted && (
+          <button className="btn btn-secondary" onClick={postToGl} disabled={busy} data-testid="emp201-post">
+            Post to GL
+          </button>
+        )}
+        {isPosted && (
+          <button className="btn btn-ghost" onClick={reverse} disabled={busy} data-testid="emp201-reverse">
+            Reverse journal
+          </button>
+        )}
       </div>
+      {isPosted && (
+        <div className="card p-3 mb-3" style={{ borderLeft: "3px solid #10b981" }} data-testid="emp201-posted-banner">
+          <div className="text-sm">
+            <b style={{ color: "#10b981" }}>Finalised.</b> Posted to GL on {new Date(posting.posted_at).toLocaleString()}.
+            Journal ID: <code className="text-xs">{posting.journal_id}</code>
+          </div>
+        </div>
+      )}
       {data && (
         <div className="card p-5" data-testid="emp201-card">
           <h3 className="font-head text-lg font-semibold mb-3">EMP201 · {data.period}</h3>

@@ -15,10 +15,13 @@ Only signed-off: owner/admin/accountant. Writes an audit row on every export.
 from __future__ import annotations
 
 import io
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path as _Path
 
-from fastapi import Depends
+from fastapi import Depends, UploadFile, HTTPException
+from fastapi import File as _File, Form as _Form
 from fastapi.responses import StreamingResponse
 
 import server as _srv
@@ -26,6 +29,10 @@ from accounting_pdf import fmt_zar, report_table
 
 # Convenience shortcuts
 _fmt = fmt_zar
+
+# Allowed signature image suffixes
+_AFS_SIG_SUFFIXES = {".png", ".jpg", ".jpeg"}
+_AFS_SIG_MAX_BYTES = 2 * 1024 * 1024   # 2 MB is plenty for a signature PNG
 
 
 async def _compute_cash_flow(owner_id: str, date_from: str | None, date_to: str):
@@ -235,9 +242,15 @@ def _build_afs_story(
     cashflow: dict,
     vat: dict,
     notes: list[dict],
+    signature: dict | None = None,
 ):
-    """Build the ReportLab platypus `story` list for the whole AFS PDF."""
-    from reportlab.platypus import Paragraph, Spacer, PageBreak
+    """Build the ReportLab platypus `story` list for the whole AFS PDF.
+
+    `signature` (if provided) = {
+       "disk_path", "accountant_name", "firm", "registration", "signed_date"
+    } and embeds the PNG/JPG on the sign-off page with the accompanying metadata.
+    """
+    from reportlab.platypus import Paragraph, Spacer, PageBreak, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.colors import HexColor
 
@@ -410,14 +423,44 @@ def _build_afs_story(
         "relevant professional standards and the requirements of the Companies Act of South Africa.",
         styles["Normal"],
     ))
-    story.append(Spacer(1, 30))
-    story.append(Paragraph("Accountant name: " + "_" * 60, styles["Normal"]))
-    story.append(Spacer(1, 18))
-    story.append(Paragraph("Firm / Practice: " + "_" * 60, styles["Normal"]))
-    story.append(Spacer(1, 18))
-    story.append(Paragraph("Registration body &amp; number (CA(SA) / SAIPA / SAICA): " + "_" * 40, styles["Normal"]))
-    story.append(Spacer(1, 18))
-    story.append(Paragraph("Signature: " + "_" * 48 + "   Date: " + "_" * 20, styles["Normal"]))
+    story.append(Spacer(1, 24))
+
+    if signature and signature.get("disk_path") and os.path.exists(signature["disk_path"]):
+        # Pre-filled sign-off with uploaded signature image
+        story.append(Paragraph(f"Accountant name: <b>{signature.get('accountant_name') or '—'}</b>", styles["Normal"]))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(f"Firm / Practice: <b>{signature.get('firm') or '—'}</b>", styles["Normal"]))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            f"Registration body &amp; number: <b>{signature.get('registration') or '—'}</b>",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 14))
+        # Embed signature image (max height 60pt, preserve aspect ratio)
+        try:
+            img = Image(signature["disk_path"])
+            # Scale to max 200 × 60 pts
+            iw, ih = img.imageWidth, img.imageHeight
+            max_w, max_h = 200.0, 60.0
+            scale = min(max_w / iw, max_h / ih, 1.0)
+            img.drawWidth = iw * scale
+            img.drawHeight = ih * scale
+            story.append(img)
+        except Exception:
+            story.append(Paragraph("<i>(Signature image could not be embedded)</i>", styles["Muted"]))
+        story.append(Spacer(1, 6))
+        sig_date = signature.get("signed_date") or datetime.now(timezone.utc).date().isoformat()
+        story.append(Paragraph(f"Signature · Date signed: <b>{sig_date}</b>", styles["Muted"]))
+    else:
+        # Blank sign-off fields for manual wet signature
+        story.append(Paragraph("Accountant name: " + "_" * 60, styles["Normal"]))
+        story.append(Spacer(1, 18))
+        story.append(Paragraph("Firm / Practice: " + "_" * 60, styles["Normal"]))
+        story.append(Spacer(1, 18))
+        story.append(Paragraph("Registration body &amp; number (CA(SA) / SAIPA / SAICA): " + "_" * 40, styles["Normal"]))
+        story.append(Spacer(1, 18))
+        story.append(Paragraph("Signature: " + "_" * 48 + "   Date: " + "_" * 20, styles["Normal"]))
+
     story.append(Spacer(1, 24))
     story.append(Paragraph(
         "<b>Disclaimer:</b> These AFS are produced by Ascent CRM's accounting module as a "
@@ -432,6 +475,83 @@ def _build_afs_story(
 
 def register_afs_routes(api_router):
     """Register the AFS-bundle endpoint on the shared /api router."""
+
+    # ── Accountant signature upload (Batch F polish) ────────────────────────
+    @api_router.post("/accounting/afs/signature")
+    async def upload_afs_signature(
+        file: UploadFile = _File(...),
+        accountant_name: str = _Form(...),
+        firm: str = _Form(""),
+        registration: str = _Form(""),
+        signed_date: str = _Form(""),
+        u: dict = Depends(_srv.require_accountant),
+    ):
+        """Upload a PNG/JPEG signature to embed on the AFS sign-off page.
+
+        Replaces any existing signature. Returns the stored metadata.
+        """
+        suffix = _Path(file.filename or "").suffix.lower()
+        if suffix not in _AFS_SIG_SUFFIXES:
+            raise HTTPException(400, f"Signature must be PNG or JPEG (.png/.jpg/.jpeg). Got: {suffix}")
+        data = await file.read()
+        if len(data) == 0:
+            raise HTTPException(400, "Empty file")
+        if len(data) > _AFS_SIG_MAX_BYTES:
+            raise HTTPException(413, f"Signature too large (>{_AFS_SIG_MAX_BYTES // (1024*1024)} MB)")
+
+        target_dir = _srv.UPLOAD_ROOT / u["id"] / "afs"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # Wipe any prior signature on disk (PNG or JPG)
+        for existing in target_dir.glob("signature.*"):
+            try:
+                existing.unlink()
+            except Exception:
+                pass
+        disk_path = target_dir / f"signature{suffix}"
+        disk_path.write_bytes(data)
+
+        sig_meta = {
+            "accountant_name": accountant_name.strip(),
+            "firm": firm.strip(),
+            "registration": registration.strip(),
+            "signed_date": signed_date.strip() or datetime.now(timezone.utc).date().isoformat(),
+            "disk_path": str(disk_path),
+            "content_type": file.content_type or ("image/png" if suffix == ".png" else "image/jpeg"),
+            "size": len(data),
+            "uploaded_at": _srv.now_iso(),
+            "uploaded_by": u["actor_id"],
+        }
+        await _srv.db.users.update_one({"id": u["id"]}, {"$set": {"afs_signature": sig_meta}})
+        await _srv.audit(
+            u["actor_id"], "upload_afs_signature", "accounting", u["id"],
+            after={"accountant_name": sig_meta["accountant_name"], "size": sig_meta["size"]},
+        )
+        # Do not leak disk_path
+        return {k: v for k, v in sig_meta.items() if k != "disk_path"}
+
+    @api_router.get("/accounting/afs/signature")
+    async def get_afs_signature(u: dict = Depends(_srv.current_user)):
+        user = await _srv.db.users.find_one({"id": u["id"]}, {"_id": 0, "afs_signature": 1})
+        sig = (user or {}).get("afs_signature") or None
+        if not sig:
+            return {"signature": None}
+        return {"signature": {k: v for k, v in sig.items() if k != "disk_path"}}
+
+    @api_router.delete("/accounting/afs/signature")
+    async def delete_afs_signature(u: dict = Depends(_srv.require_accountant)):
+        user = await _srv.db.users.find_one({"id": u["id"]}, {"_id": 0, "afs_signature": 1})
+        sig = (user or {}).get("afs_signature") or None
+        if not sig:
+            raise HTTPException(404, "No signature on file")
+        try:
+            dp = sig.get("disk_path")
+            if dp and os.path.exists(dp):
+                os.unlink(dp)
+        except Exception:
+            pass
+        await _srv.db.users.update_one({"id": u["id"]}, {"$unset": {"afs_signature": ""}})
+        await _srv.audit(u["actor_id"], "delete_afs_signature", "accounting", u["id"])
+        return {"ok": True}
 
     @api_router.get("/accounting/reports/afs-bundle/pdf")
     async def afs_bundle_pdf(
@@ -458,7 +578,11 @@ def register_afs_routes(api_router):
         branding = await _srv._resolve_owner_branding(u["id"])
         notes = _afs_notes(branding["company_name"], dfrom, dto)
 
-        story = _build_afs_story(branding, dfrom, dto, income, balance, cashflow, vat, notes)
+        # Load accountant signature (if uploaded)
+        user_row = await _srv.db.users.find_one({"id": u["id"]}, {"_id": 0, "afs_signature": 1})
+        signature = (user_row or {}).get("afs_signature") or None
+
+        story = _build_afs_story(branding, dfrom, dto, income, balance, cashflow, vat, notes, signature=signature)
 
         # Render
         from reportlab.lib.pagesizes import A4

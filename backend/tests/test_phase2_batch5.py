@@ -230,12 +230,16 @@ class TestAttachments:
         r = requests.post(f"{API}/quotes/{a_quote['id']}/attachments", files=files)
         assert r.status_code in (401, 403)
 
-    def test_upload_unknown_resource_400(self, owner_token):
+    def test_upload_unknown_resource_404(self, owner_token):
+        """Explicit routes: only /quotes and /invoices accept attachments.
+
+        Previously the catch-all route returned 400; since tightening to explicit
+        routes a non-attachable resource gets a clean 404 (route doesn't exist).
+        """
         files = {"file": ("test.pdf", TINY_PDF, "application/pdf")}
         r = requests.post(f"{API}/contacts/abc/attachments",
                           headers=_hdr(owner_token, ctype_json=False), files=files)
-        # Should be 400 (not attachable) — not 404/500
-        assert r.status_code == 400, f"expected 400 for non-attachable resource, got {r.status_code}: {r.text[:200]}"
+        assert r.status_code == 404, f"expected 404 for non-attachable resource, got {r.status_code}: {r.text[:200]}"
 
     def test_upload_unknown_quote_404(self, owner_token):
         files = {"file": ("test.pdf", TINY_PDF, "application/pdf")}

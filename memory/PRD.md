@@ -249,6 +249,47 @@ Goal user set: "1 then 5" — (1) end-to-end verify PDFs/bank-rec/assets/receipt
 - Phase 2 Batch E — AFS PDF export bundle (IS+BS+CF+notes in one signed PDF).
 - Full router split (deps.py → routers/accounting.py → routers/crm.py …).
 
+## Session: Apr 23, 2026 — Batch F polish shipped (iter-12)
+
+User follow-up: "(P1) AFS sign-off signature upload + (P1) Tighten attachment catch-all routes".
+
+### AFS digital signature (Batch F polish) ✅
+Accountants can now upload a PNG/JPEG signature once; every subsequent AFS bundle PDF embeds it on page 7 with the signer's name, firm, registration and date — replacing the legacy blank sign-off lines.
+
+New endpoints in `accounting_afs.py`:
+  - `POST /api/accounting/afs/signature` — multipart upload (PNG/JPEG, 2 MB cap). Form fields: `file`, `accountant_name` (required), `firm`, `registration`, `signed_date`. Idempotently replaces any previous signature on disk and in the user record. `require_accountant` RBAC.
+  - `GET /api/accounting/afs/signature` — returns signature metadata (never the disk path).
+  - `DELETE /api/accounting/afs/signature` — removes file + metadata. 404 if none on file.
+
+AFS bundle generator (`_build_afs_story`) accepts a `signature` kwarg and, when present, embeds the image via ReportLab's `Image` on the sign-off page (scaled to max 200 × 60 pts, aspect-preserving). The sign-off route pulls it lazily from `users.afs_signature` at render time so old exports keep blank-line formatting if no signature is set.
+
+Frontend: new **"Digital signature for AFS bundle"** card at the top of the Periods tab (`data-testid="afs-signature-card"`). Form has 5 fields (name, firm, registration, date, file) + a green "Signature on file" banner with metadata + Remove button when one exists.
+
+### Attachment routes tightened ✅
+Removed the catch-all `POST/GET /{resource}/{rid}/attachments` routes. Replaced with explicit:
+  - `POST /api/quotes/{rid}/attachments`, `GET /api/quotes/{rid}/attachments`
+  - `POST /api/invoices/{rid}/attachments`, `GET /api/invoices/{rid}/attachments`
+
+Shared helpers `_upload_attachment_impl` + `_list_attachments_impl` keep the logic DRY. Requests to non-attachable resources (contacts, companies, deals, …) now 404 at the FastAPI routing layer instead of getting caught by a generic handler that returned 400. Cleaner API surface, no more "not attachable" leak; all existing tests updated.
+
+### Tests
+New file `tests/test_phase2_batch_f_signature_routes.py` — **12/12 green**:
+  - 9 AFS signature cases (initial null, upload+fetch, non-image 400, empty 400, replace overwrite, PDF embed succeeds, delete, 404 when absent, rep RBAC 403)
+  - 3 attachment tightening cases (quotes route works, invoices route works, 4 non-attachable resources return 404 instead of 400)
+
+Updated `test_phase2_batch5.py::test_upload_unknown_resource` from expecting 400 → 404 (reflects the tightened semantics).
+
+Regression: **244 pass + 4 skip** (+12 new tests from 232 → 244). Only 2 pre-existing PayPal env-fails remain (missing sandbox credentials, unchanged).
+
+### Next Action Items
+- (P2) PayPal sandbox smoke test when user provides `PAYPAL_CLIENT_ID` + `PAYPAL_SECRET`.
+- (P2) Real IMAP sync (awaiting Gmail/Outlook app password).
+- (P2) Calendly/Zoom/MS Graph OAuth (awaiting sandbox credentials).
+- (P3) CSV bulk employee import for Payroll register.
+- (P3) Full router split — `server.py` now ~4,380 lines; monolith is stable and not growing.
+- (P3) Phase 3 — Windows native fork (.NET 9 + WinUI 3).
+
+
 ## Session: Apr 23, 2026 — Phase 2 Batch D v2 shipped (iter-11)
 
 User follow-up: "EMP201 auto-journal + PAYE refinements".

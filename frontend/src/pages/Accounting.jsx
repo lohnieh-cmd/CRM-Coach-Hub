@@ -468,6 +468,103 @@ function VAT201() {
 }
 
 // ── Periods + sign-off -------------------------------------------------------
+function AfsSignatureCard() {
+  const [sig, setSig] = useState(null);
+  const [form, setForm] = useState({ accountant_name: "", firm: "", registration: "", signed_date: "" });
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const { data } = await api.get("/accounting/afs/signature");
+      setSig(data.signature);
+      if (data.signature) {
+        setForm({
+          accountant_name: data.signature.accountant_name || "",
+          firm: data.signature.firm || "",
+          registration: data.signature.registration || "",
+          signed_date: data.signature.signed_date || "",
+        });
+      }
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to load signature"); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const upload = async () => {
+    if (!file) { toast.error("Select a PNG or JPEG image first"); return; }
+    if (!form.accountant_name.trim()) { toast.error("Accountant name is required"); return; }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("accountant_name", form.accountant_name);
+      fd.append("firm", form.firm);
+      fd.append("registration", form.registration);
+      fd.append("signed_date", form.signed_date);
+      await api.post("/accounting/afs/signature", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success("Signature saved");
+      setFile(null);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Upload failed"); }
+    finally { setBusy(false); }
+  };
+
+  const del = async () => {
+    if (!window.confirm("Delete the saved signature? Future AFS exports will revert to blank signature lines.")) return;
+    try { await api.delete("/accounting/afs/signature"); toast.success("Deleted"); setSig(null); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  return (
+    <div className="card p-5 mb-4" data-testid="afs-signature-card">
+      <div className="label-caps text-[#e26e4a] mb-1">Accountant Sign-off</div>
+      <h3 className="font-head text-xl font-semibold mb-1">Digital signature for AFS bundle</h3>
+      <p className="text-sm text-[#94a3b8] leading-relaxed mb-3">
+        Upload a PNG or JPEG of the signing accountant's signature. When set, every AFS bundle PDF
+        export will have this signature (plus name, firm, and registration) pre-filled on page 7
+        instead of blank signature lines. Replaces any previous signature on upload.
+      </p>
+      {sig && (
+        <div className="card p-3 mb-3" style={{ borderLeft: "3px solid #10b981" }}>
+          <div className="text-sm flex justify-between items-center">
+            <div>
+              <b style={{ color: "#10b981" }}>Signature on file:</b> {sig.accountant_name}
+              {sig.firm && <span className="text-[#94a3b8]"> · {sig.firm}</span>}
+              {sig.registration && <span className="text-[#94a3b8]"> · {sig.registration}</span>}
+              <span className="text-xs text-[#64748b] block mt-1">
+                Uploaded {new Date(sig.uploaded_at).toLocaleString()} · {(sig.size/1024).toFixed(1)} KB
+              </span>
+            </div>
+            <button className="btn btn-ghost text-xs" onClick={del} data-testid="afs-sig-delete">Remove</button>
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Accountant name *">
+          <input className="input" value={form.accountant_name} onChange={e => setForm({ ...form, accountant_name: e.target.value })} data-testid="afs-sig-name" placeholder="Jane Smith CA(SA)"/>
+        </Field>
+        <Field label="Firm / practice">
+          <input className="input" value={form.firm} onChange={e => setForm({ ...form, firm: e.target.value })} data-testid="afs-sig-firm" placeholder="Smith & Co."/>
+        </Field>
+        <Field label="Registration (CA(SA) / SAIPA / SAICA)">
+          <input className="input" value={form.registration} onChange={e => setForm({ ...form, registration: e.target.value })} data-testid="afs-sig-reg" placeholder="CASA-12345"/>
+        </Field>
+        <Field label="Signed date">
+          <input type="date" className="input" value={form.signed_date} onChange={e => setForm({ ...form, signed_date: e.target.value })} data-testid="afs-sig-date"/>
+        </Field>
+        <Field label="Signature image (PNG or JPEG, max 2 MB)">
+          <input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" className="input" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="afs-sig-file"/>
+        </Field>
+        <div className="flex items-end">
+          <button className="btn btn-primary" onClick={upload} disabled={busy} data-testid="afs-sig-upload">
+            {sig ? "Replace signature" : "Save signature"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AfsBundleCard() {
   // SA fiscal year default: 1 March prev year → end of Feb current year,
   // or YTD for the current SA fiscal year.
@@ -517,6 +614,7 @@ function Periods() {
 
   return (
     <div>
+      <AfsSignatureCard/>
       <AfsBundleCard/>
       <div className="card overflow-hidden">
         <table className="atable" data-testid="periods-table">

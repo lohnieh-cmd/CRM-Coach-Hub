@@ -2813,18 +2813,35 @@ MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024  # 15 MB
 ALLOWED_ATTACHMENT_SUFFIXES = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg"}
 
 
-@api.post("/{resource}/{rid}/attachments")
-async def upload_attachment(
-    resource: str,
+@api.post("/quotes/{rid}/attachments")
+async def upload_quote_attachment(
     rid: str,
     file: UploadFile = _File(...),
     kind: str | None = _Form(None),
     u: dict = Depends(current_user),
 ):
+    return await _upload_attachment_impl("quotes", rid, file, kind, u)
+
+
+@api.post("/invoices/{rid}/attachments")
+async def upload_invoice_attachment(
+    rid: str,
+    file: UploadFile = _File(...),
+    kind: str | None = _Form(None),
+    u: dict = Depends(current_user),
+):
+    return await _upload_attachment_impl("invoices", rid, file, kind, u)
+
+
+async def _upload_attachment_impl(
+    resource: str,
+    rid: str,
+    file: UploadFile,
+    kind: str | None,
+    u: dict,
+):
     """Attach a PDF (or other allowed type) to a quote/invoice. `kind` is a free-form tag
     like 'signed_quote' or 'signed_invoice' for display."""
-    if resource not in ATTACHABLE:
-        raise HTTPException(400, f"Not attachable: {resource}")
     coll = ATTACHABLE[resource]
     row = await db[coll].find_one({"id": rid, "owner_id": u["id"]}, {"_id": 0, "id": 1})
     if not row:
@@ -2863,10 +2880,17 @@ async def upload_attachment(
     return rec
 
 
-@api.get("/{resource}/{rid}/attachments")
-async def list_attachments(resource: str, rid: str, u: dict = Depends(current_user)):
-    if resource not in ATTACHABLE:
-        raise HTTPException(400, f"Not attachable: {resource}")
+@api.get("/quotes/{rid}/attachments")
+async def list_quote_attachments(rid: str, u: dict = Depends(current_user)):
+    return await _list_attachments_impl("quotes", rid, u)
+
+
+@api.get("/invoices/{rid}/attachments")
+async def list_invoice_attachments(rid: str, u: dict = Depends(current_user)):
+    return await _list_attachments_impl("invoices", rid, u)
+
+
+async def _list_attachments_impl(resource: str, rid: str, u: dict):
     rows = await db.attachments.find(
         {"owner_id": u["id"], "resource": resource, "resource_id": rid},
         {"_id": 0, "disk_path": 0},

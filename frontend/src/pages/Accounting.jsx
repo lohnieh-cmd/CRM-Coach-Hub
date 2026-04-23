@@ -735,8 +735,8 @@ function FixedAssets() {
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         <button className="btn btn-primary" onClick={() => setShow(true)} data-testid="asset-new"><Plus size={14}/> New Asset</button>
         <div className="flex items-end gap-2 ml-auto">
-          <Field label="Period (YYYY-MM)">
-            <input className="input font-mono" value={period} onChange={e => setPeriod(e.target.value)} data-testid="depr-period"/>
+          <Field label="Period (month)">
+            <input type="month" className="input font-mono" value={period} onChange={e => setPeriod(e.target.value)} data-testid="depr-period"/>
           </Field>
           <button className="btn btn-secondary" onClick={depreciate} data-testid="depr-run"><ArrowClockwise size={14}/> Post Depreciation</button>
         </div>
@@ -1332,8 +1332,8 @@ function Emp201Panel() {
   return (
     <div>
       <div className="flex items-end gap-3 mb-3 flex-wrap">
-        <Field label="Period (YYYY-MM)">
-          <input type="text" className="input" value={period} onChange={e => setPeriod(e.target.value)} placeholder="2026-04" data-testid="emp201-period"/>
+        <Field label="Period (month)">
+          <input type="month" className="input" value={period} onChange={e => setPeriod(e.target.value)} placeholder="2026-04" data-testid="emp201-period"/>
         </Field>
         <button className="btn btn-primary" onClick={run} data-testid="emp201-run"><Calculator size={14}/> Run</button>
         {data && data.employees && data.employees.length > 0 && !isPosted && (

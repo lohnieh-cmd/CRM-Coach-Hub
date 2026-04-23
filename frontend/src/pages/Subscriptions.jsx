@@ -93,13 +93,13 @@ export default function Subscriptions() {
 }
 
 function NewSubModal({ open, onClose, products, contacts, onSaved }) {
-  const [f, setF] = useState({ interval:"monthly", quantity:1, cycles:null });
+  const [f, setF] = useState({ interval:"monthly", quantity:1, cycles:null, start_date: "" });
   useEffect(()=>{ if(open && products.length && !f.product_id) setF((x)=>({...x, product_id: products[0].id})); },[open, products]);
   const save = async () => {
     try {
-      await api.post("/subscriptions", f);
+      await api.post("/subscriptions", { ...f, start_date: f.start_date || null });
       toast.success("Subscription created"); onSaved(); onClose();
-      setF({ interval:"monthly", quantity:1, cycles:null });
+      setF({ interval:"monthly", quantity:1, cycles:null, start_date: "" });
     } catch(e){ toast.error(e?.response?.data?.detail||"Failed"); }
   };
   return (
@@ -129,6 +129,9 @@ function NewSubModal({ open, onClose, products, contacts, onSaved }) {
             </select>
           </Field>
         </div>
+        <Field label="Start date (first billing — defaults to today)">
+          <input type="date" className="input" value={f.start_date} onChange={(e)=>setF({...f, start_date:e.target.value})} data-testid="sub-start-date"/>
+        </Field>
       </div>
       <div className="flex justify-end gap-2 mt-6">
         <button className="btn btn-secondary" onClick={onClose}>Cancel</button>

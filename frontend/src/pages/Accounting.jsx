@@ -15,6 +15,7 @@ const TABS = [
   { key: "assets",    label: "Fixed Assets",     testid: "tab-assets" },
   { key: "bank",      label: "Bank & Recon",     testid: "tab-bank" },
   { key: "receipts",  label: "Receipts (OCR)",   testid: "tab-receipts" },
+  { key: "payroll",   label: "Payroll & Tax",    testid: "tab-payroll" },
   { key: "periods",   label: "Periods & Sign-off", testid: "tab-periods" },
 ];
 
@@ -84,6 +85,7 @@ export default function Accounting() {
         {tab === "assets"    && <FixedAssets/>}
         {tab === "bank"      && <BankRecon/>}
         {tab === "receipts"  && <Receipts/>}
+        {tab === "payroll"   && <PayrollAndTax/>}
         {tab === "periods"   && <Periods/>}
       </div>
     </div>
@@ -466,6 +468,41 @@ function VAT201() {
 }
 
 // ── Periods + sign-off -------------------------------------------------------
+function AfsBundleCard() {
+  // SA fiscal year default: 1 March prev year → end of Feb current year,
+  // or YTD for the current SA fiscal year.
+  const today = new Date();
+  const saFyStart = today.getMonth() >= 2   // Mar = 2 (0-indexed)
+    ? `${today.getFullYear()}-03-01`
+    : `${today.getFullYear() - 1}-03-01`;
+  const [from, setFrom] = useState(saFyStart);
+  const [to, setTo] = useState(today.toISOString().slice(0, 10));
+
+  return (
+    <div className="card p-5 mb-4" data-testid="afs-bundle-card">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="label-caps text-[#e26e4a] mb-1">Annual Financial Statements</div>
+          <h3 className="font-head text-xl font-semibold mb-1">AFS bundle · accountant-ready pack</h3>
+          <p className="text-sm text-[#94a3b8] leading-relaxed">
+            One branded PDF: cover · Income Statement · Balance Sheet · Cash Flow (indirect) · VAT 201 summary · 8 auto-generated notes (IFRS for SMEs baseline) · CA(SA)/SAIPA/SAICA sign-off block.
+            Defaults to the current SA fiscal year (1 Mar → today).
+          </p>
+        </div>
+        <div className="flex items-end gap-2 flex-wrap">
+          <Field label="From"><input type="date" className="input" value={from} onChange={e => setFrom(e.target.value)} data-testid="afs-from"/></Field>
+          <Field label="To"><input type="date" className="input" value={to} onChange={e => setTo(e.target.value)} data-testid="afs-to"/></Field>
+          <PdfDownloadBtn
+            path={`/accounting/reports/afs-bundle/pdf?date_from=${from}&date_to=${to}`}
+            name={`AFS_${from}_to_${to}.pdf`}
+            testid="afs-pdf"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Periods() {
   const [rows, setRows] = useState([]);
   const [signoff, setSignoff] = useState(null);
@@ -480,6 +517,7 @@ function Periods() {
 
   return (
     <div>
+      <AfsBundleCard/>
       <div className="card overflow-hidden">
         <table className="atable" data-testid="periods-table">
           <thead><tr><th>Period</th><th>Status</th><th>Closed</th><th>Locked</th><th>Signed off</th><th className="text-right">Actions</th></tr></thead>
@@ -1020,5 +1058,291 @@ function PostReceiptModal({ receipt, onClose, onSaved }) {
         <button className="btn btn-primary" onClick={save} data-testid="rcp-post">Post Journal</button>
       </div>
     </Modal>
+  );
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Phase 2 Batch D — Payroll & Tax (Employees · EMP201 · IRP6 · Dividends Tax)
+// ══════════════════════════════════════════════════════════════════════════════
+function PayrollAndTax() {
+  const [sub, setSub] = useState("employees");
+  const SUBTABS = [
+    { k: "employees",  l: "Employees" },
+    { k: "emp201",     l: "EMP201 (PAYE/UIF/SDL)" },
+    { k: "irp6",       l: "IRP6 Provisional Tax" },
+    { k: "dividends",  l: "Dividends Tax" },
+  ];
+  return (
+    <div>
+      <div className="flex gap-1 border-b border-[#283341] mb-4" data-testid="payroll-subtabs">
+        {SUBTABS.map(t => (
+          <button
+            key={t.k}
+            role="tab"
+            className={`px-3 py-2 text-xs ${sub === t.k ? "text-[#e26e4a] border-b-2 border-[#e26e4a]" : "text-[#94a3b8] hover:text-[#cdd6e0]"}`}
+            onClick={() => setSub(t.k)}
+            data-testid={`payroll-sub-${t.k}`}
+          >{t.l}</button>
+        ))}
+      </div>
+      {sub === "employees" && <EmployeesRegister/>}
+      {sub === "emp201"    && <Emp201Panel/>}
+      {sub === "irp6"      && <Irp6Panel/>}
+      {sub === "dividends" && <DividendsPanel/>}
+    </div>
+  );
+}
+
+function EmployeesRegister() {
+  const [rows, setRows] = useState([]);
+  const [show, setShow] = useState(false);
+  const [form, setForm] = useState({ name: "", monthly_gross: "", role: "", tax_status: "standard" });
+
+  const load = async () => {
+    const { data } = await api.get("/accounting/employees?active_only=false");
+    setRows(data);
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    try {
+      await api.post("/accounting/employees", {
+        ...form,
+        monthly_gross: parseFloat(form.monthly_gross || 0),
+      });
+      toast.success("Employee added");
+      setShow(false); setForm({ name: "", monthly_gross: "", role: "", tax_status: "standard" });
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  const terminate = async (id) => {
+    if (!window.confirm("Terminate this employee?")) return;
+    try { await api.delete(`/accounting/employees/${id}`); toast.success("Terminated"); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm text-[#94a3b8]">Register of employees used for EMP201 payroll tax computation. Monthly gross is the base before PAYE/UIF deductions.</p>
+        <button className="btn btn-primary" onClick={() => setShow(true)} data-testid="emp-new"><Plus size={14}/> New Employee</button>
+      </div>
+      <div className="card overflow-hidden">
+        <table className="atable" data-testid="employees-table">
+          <thead><tr><th>Name</th><th>Role</th><th>Monthly Gross</th><th>Tax status</th><th>Status</th><th className="text-right">Actions</th></tr></thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={6} className="text-center text-[#94a3b8] py-6">No employees yet — click <b>New Employee</b> to add one.</td></tr>
+            )}
+            {rows.map(e => (
+              <tr key={e.id} data-testid={`emp-row-${e.id}`}>
+                <td className="font-semibold">{e.name}</td>
+                <td className="text-sm text-[#94a3b8]">{e.role || "—"}</td>
+                <td className="font-mono">{ZAR(e.monthly_gross)}</td>
+                <td className="text-xs">{e.tax_status}</td>
+                <td><span className="chip" style={{color: e.active ? "#10b981" : "#94a3b8"}}>{e.active ? "active" : "terminated"}</span></td>
+                <td className="text-right">
+                  {e.active && <button className="btn btn-ghost text-xs" onClick={() => terminate(e.id)} data-testid={`emp-term-${e.id}`}>Terminate</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Modal open={show} onClose={() => setShow(false)} title="New Employee">
+        <Field label="Name"><input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} data-testid="emp-name"/></Field>
+        <Field label="Role / Title"><input className="input" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}/></Field>
+        <Field label="Monthly Gross (ZAR)"><input type="number" className="input" value={form.monthly_gross} onChange={e => setForm({ ...form, monthly_gross: e.target.value })} data-testid="emp-gross"/></Field>
+        <Field label="Tax status">
+          <select className="input" value={form.tax_status} onChange={e => setForm({ ...form, tax_status: e.target.value })}>
+            <option value="standard">Standard SA resident</option>
+            <option value="director">Director</option>
+            <option value="non_resident">Non-resident (15% WHT)</option>
+          </select>
+        </Field>
+        <div className="flex justify-end gap-2 mt-4">
+          <button className="btn btn-secondary" onClick={() => setShow(false)}>Cancel</button>
+          <button className="btn btn-primary" onClick={save} data-testid="emp-save">Save</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function Emp201Panel() {
+  const now = new Date();
+  const [period, setPeriod] = useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
+  const [data, setData] = useState(null);
+  const run = async () => {
+    try { const r = await api.get(`/accounting/reports/emp201?period=${period}`); setData(r.data); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+  useEffect(() => { run(); }, []); // eslint-disable-line
+
+  return (
+    <div>
+      <div className="flex items-end gap-3 mb-3">
+        <Field label="Period (YYYY-MM)">
+          <input type="text" className="input" value={period} onChange={e => setPeriod(e.target.value)} placeholder="2026-04" data-testid="emp201-period"/>
+        </Field>
+        <button className="btn btn-primary" onClick={run} data-testid="emp201-run"><Calculator size={14}/> Run</button>
+      </div>
+      {data && (
+        <div className="card p-5" data-testid="emp201-card">
+          <h3 className="font-head text-lg font-semibold mb-3">EMP201 · {data.period}</h3>
+          <table className="atable mb-4">
+            <thead><tr><th>Employee</th><th>Gross</th><th>PAYE</th><th>UIF (emp)</th><th>UIF (er)</th><th>SDL</th><th>Net pay</th></tr></thead>
+            <tbody>
+              {data.employees.map(e => (
+                <tr key={e.employee_id}>
+                  <td>{e.name}</td>
+                  <td className="font-mono">{ZAR(e.monthly_gross)}</td>
+                  <td className="font-mono">{ZAR(e.paye)}</td>
+                  <td className="font-mono">{ZAR(e.uif_employee)}</td>
+                  <td className="font-mono">{ZAR(e.uif_employer)}</td>
+                  <td className="font-mono">{ZAR(e.sdl)}</td>
+                  <td className="font-mono">{ZAR(e.net_pay)}</td>
+                </tr>
+              ))}
+              {data.employees.length === 0 && (
+                <tr><td colSpan={7} className="text-center text-[#94a3b8] py-4">No active employees.</td></tr>
+              )}
+            </tbody>
+          </table>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div><div className="label-caps">PAYE</div><div className="font-mono font-semibold">{ZAR(data.totals.paye)}</div></div>
+            <div><div className="label-caps">UIF (total)</div><div className="font-mono font-semibold">{ZAR(data.totals.uif_total)}</div></div>
+            <div><div className="label-caps">SDL</div><div className="font-mono font-semibold">{ZAR(data.totals.sdl)}</div></div>
+            <div><div className="label-caps text-[#e26e4a]">EMP201 due to SARS</div><div className="font-mono font-semibold text-[#e26e4a]" data-testid="emp201-payable">{ZAR(data.totals.emp201_payable_to_sars)}</div></div>
+          </div>
+          <p className="text-xs text-[#94a3b8] mt-4">{data.disclaimer}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Irp6Panel() {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ tax_year: new Date().getFullYear(), period: 1, estimated_taxable_income: "", provisional_payment_prior: "0" });
+  const load = async () => { const { data } = await api.get("/accounting/reports/irp6"); setRows(data); };
+  useEffect(() => { load(); }, []);
+
+  const submit = async () => {
+    try {
+      const r = await api.post("/accounting/reports/irp6", {
+        tax_year: parseInt(form.tax_year),
+        period: parseInt(form.period),
+        estimated_taxable_income: parseFloat(form.estimated_taxable_income || 0),
+        provisional_payment_prior: parseFloat(form.provisional_payment_prior || 0),
+      });
+      toast.success(`IRP6 ${r.data.period} · Payable ${ZAR(r.data.provisional_tax_payable)}`);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <h3 className="font-head text-lg font-semibold mb-3">New IRP6 workpaper</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Field label="Tax year (Feb end)"><input type="number" className="input" value={form.tax_year} onChange={e => setForm({ ...form, tax_year: e.target.value })} data-testid="irp6-year"/></Field>
+          <Field label="Period">
+            <select className="input" value={form.period} onChange={e => setForm({ ...form, period: e.target.value })} data-testid="irp6-period">
+              <option value={1}>1 · Aug (half-year)</option>
+              <option value={2}>2 · Feb (year-end)</option>
+            </select>
+          </Field>
+          <Field label="Estimated taxable income"><input type="number" className="input" value={form.estimated_taxable_income} onChange={e => setForm({ ...form, estimated_taxable_income: e.target.value })} data-testid="irp6-income"/></Field>
+          <Field label="Prior provisional payments"><input type="number" className="input" value={form.provisional_payment_prior} onChange={e => setForm({ ...form, provisional_payment_prior: e.target.value })}/></Field>
+        </div>
+        <button className="btn btn-primary mt-3" onClick={submit} data-testid="irp6-submit"><Calculator size={14}/> Compute IRP6</button>
+      </div>
+      <div className="card overflow-hidden">
+        <table className="atable" data-testid="irp6-table">
+          <thead><tr><th>Tax year</th><th>Period</th><th>Estimated income</th><th>Tax @ 27%</th><th>Prior paid</th><th>Payable</th><th>Due by</th></tr></thead>
+          <tbody>
+            {rows.length === 0 && <tr><td colSpan={7} className="text-center text-[#94a3b8] py-4">No IRP6 workpapers yet.</td></tr>}
+            {rows.map(r => (
+              <tr key={r.id}>
+                <td>{r.tax_year}</td>
+                <td>{r.period === 1 ? "1 (Aug)" : "2 (Feb)"}</td>
+                <td className="font-mono">{ZAR(r.estimated_taxable_income)}</td>
+                <td className="font-mono">{ZAR(r.tax_at_27pct)}</td>
+                <td className="font-mono">{ZAR(r.prior_payment)}</td>
+                <td className="font-mono font-semibold text-[#e26e4a]">{ZAR(r.provisional_payable)}</td>
+                <td className="text-xs">{r.due_by}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DividendsPanel() {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({
+    beneficiary_name: "", beneficiary_type: "sa_resident_individual",
+    declaration_date: new Date().toISOString().slice(0,10),
+    gross_dividend: "", beneficiary_tax_number: "",
+  });
+  const load = async () => { const { data } = await api.get("/accounting/reports/dividends-tax"); setRows(data); };
+  useEffect(() => { load(); }, []);
+
+  const submit = async () => {
+    try {
+      await api.post("/accounting/reports/dividends-tax", {
+        ...form,
+        gross_dividend: parseFloat(form.gross_dividend || 0),
+      });
+      toast.success("Dividend declared");
+      setForm({ ...form, beneficiary_name: "", gross_dividend: "", beneficiary_tax_number: "" });
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <h3 className="font-head text-lg font-semibold mb-3">Declare a dividend</h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <Field label="Beneficiary name"><input className="input" value={form.beneficiary_name} onChange={e => setForm({ ...form, beneficiary_name: e.target.value })} data-testid="div-name"/></Field>
+          <Field label="Beneficiary type">
+            <select className="input" value={form.beneficiary_type} onChange={e => setForm({ ...form, beneficiary_type: e.target.value })} data-testid="div-type">
+              <option value="sa_resident_individual">SA resident individual (20% WHT)</option>
+              <option value="company">SA resident company (exempt)</option>
+              <option value="non_resident">Non-resident (20% WHT, DTA may apply)</option>
+            </select>
+          </Field>
+          <Field label="Declaration date"><input type="date" className="input" value={form.declaration_date} onChange={e => setForm({ ...form, declaration_date: e.target.value })}/></Field>
+          <Field label="Gross dividend (ZAR)"><input type="number" className="input" value={form.gross_dividend} onChange={e => setForm({ ...form, gross_dividend: e.target.value })} data-testid="div-gross"/></Field>
+          <Field label="Beneficiary tax number (optional)"><input className="input" value={form.beneficiary_tax_number} onChange={e => setForm({ ...form, beneficiary_tax_number: e.target.value })}/></Field>
+        </div>
+        <button className="btn btn-primary mt-3" onClick={submit} data-testid="div-submit"><Plus size={14}/> Declare</button>
+      </div>
+      <div className="card overflow-hidden">
+        <table className="atable" data-testid="dividends-table">
+          <thead><tr><th>Date</th><th>Beneficiary</th><th>Type</th><th>Gross</th><th>WHT (20%)</th><th>Net paid</th></tr></thead>
+          <tbody>
+            {rows.length === 0 && <tr><td colSpan={6} className="text-center text-[#94a3b8] py-4">No dividends declared.</td></tr>}
+            {rows.map(r => (
+              <tr key={r.id}>
+                <td className="font-mono text-xs">{r.declaration_date}</td>
+                <td>{r.beneficiary_name}</td>
+                <td className="text-xs">{r.beneficiary_type.replace(/_/g, " ")}</td>
+                <td className="font-mono">{ZAR(r.gross_dividend)}</td>
+                <td className="font-mono">{ZAR(r.dividends_tax_withheld)}</td>
+                <td className="font-mono">{ZAR(r.net_dividend_paid)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-[#94a3b8]">Submit the DTR01 return to SARS by the end of the month following declaration. SA resident companies are generally exempt under section 64F. Non-resident rates may be reduced by DTA.</p>
+    </div>
   );
 }

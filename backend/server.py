@@ -4334,6 +4334,17 @@ async def delete_receipt(rid: str, u: dict = Depends(require_accountant)):
     return {"ok": True}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 2 batch E — Annual Financial Statements (AFS) PDF bundle
+#  Registered here (after all shared helpers are defined) via a setup function.
+# ══════════════════════════════════════════════════════════════════════════════
+from accounting_afs import register_afs_routes  # noqa: E402
+register_afs_routes(api)
+
+from accounting_payroll import register_payroll_routes  # noqa: E402
+register_payroll_routes(api)
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,

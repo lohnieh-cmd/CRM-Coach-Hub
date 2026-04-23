@@ -2208,7 +2208,26 @@ async def create_task_manual(p: TaskIn, u: dict = Depends(current_user)):
 
 @api.patch("/tasks/{tid}")
 async def update_task(tid: str, body: dict = Body(...), u: dict = Depends(current_user)):
-    allowed = {k: v for k, v in body.items() if k in ("title", "status", "due_date", "notes", "assignee_id")}
+    allowed = {k: v for k, v in body.items()
+               if k in ("title", "status", "due_date", "notes", "assignee_id",
+                         "contact_id", "deal_id")}
+    # Keep `related_entity_*` in sync if contact/deal re-parenting occurs.
+    if "contact_id" in allowed or "deal_id" in allowed:
+        # Resolve both (treat absent key = no change; use current doc for missing side)
+        current = await db.tasks.find_one({"id": tid, "owner_id": u["id"]}, {"_id": 0, "contact_id": 1, "deal_id": 1})
+        if not current:
+            raise HTTPException(404, "Task not found")
+        new_contact = allowed.get("contact_id", current.get("contact_id"))
+        new_deal = allowed.get("deal_id", current.get("deal_id"))
+        if new_contact:
+            allowed["related_entity_type"] = "contact"
+            allowed["related_entity_id"] = new_contact
+        elif new_deal:
+            allowed["related_entity_type"] = "deal"
+            allowed["related_entity_id"] = new_deal
+        else:
+            allowed["related_entity_type"] = None
+            allowed["related_entity_id"] = None
     if body.get("status") == "done":
         allowed["completed_at"] = now_iso()
     return await _update("tasks", tid, allowed, u["actor_id"], "task")
